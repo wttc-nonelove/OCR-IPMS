@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func
@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from app.models.entities import ApprovalInstance, ApprovalTask, Contract, ContractDiff, DictItem, Invoice, Payment, Project, ProjectClose, User
-from app.models.enums import ADMIN, APPROVAL_PENDING, BUSINESS, PM, PROJECT_ACTIVE, PROJECT_APPROVED, PROJECT_CLOSED, PROJECT_DRAFT, PROJECT_PENDING
+from app.models.enums import ADMIN, APPROVAL_PENDING, APPROVAL_APPROVED, APPROVAL_REJECTED, BUSINESS, PM, PROJECT_ACTIVE, PROJECT_APPROVED, PROJECT_CLOSED, PROJECT_DRAFT, PROJECT_PENDING
 from app.schemas.business import ContractDiffConfirmIn, ProjectApproveIn, ProjectOut, ProjectStartIn
 from app.schemas.common import ok
 from app.services.audit import log_action
@@ -226,10 +226,12 @@ async def parse_stamped_contract(
     db.flush()
     result = recognize_file(db, path, "contract")
     extracted = result.get("extracted_info") or {}
-    diffs = _create_contract_diffs(db, project, contract.id, extracted)
+    db.query(ContractDiff).filter(ContractDiff.project_id == project.id).delete(synchronize_session=False)
+    diffs, unrecognized_fields = _create_contract_diffs(db, project, contract.id, extracted)
     log_action(db, user, "project_stamped_contract_parse", f"{project.project_no} {pdf_contract.filename}")
     db.commit()
-    return ok({"diffs": [_diff_out(d) for d in diffs], "extracted": extracted, "ocr": result}, "识别完成")
+    message = "识别完成，未发现差异" if not diffs else f"识别完成，生成 {len(diffs)} 条差异"
+    return ok({"diffs": [_diff_out(d) for d in diffs], "unrecognized_fields": unrecognized_fields, "extracted": extracted, "ocr": result}, message)
 
 
 @router.get("/options")
@@ -398,6 +400,7 @@ async def update_project(
         db.flush()
         result = recognize_file(db, path, "contract")
         extracted = result["extracted_info"]
+        db.query(ContractDiff).filter(ContractDiff.project_id == project.id).delete(synchronize_session=False)
         _create_contract_diffs(db, project, contract.id, extracted)
     log_action(db, user, "project_update", f"{project.project_no} {project.name}")
     db.commit()
@@ -426,6 +429,8 @@ def approve_project(payload: ProjectApproveIn, db: Session = Depends(get_db), us
     project = db.query(Project).filter(Project.id == payload.project_id).first()
     if not project or project.status != PROJECT_PENDING:
         raise HTTPException(status_code=400, detail="项目不可审核")
+    if payload.result not in {APPROVAL_APPROVED, APPROVAL_REJECTED}:
+        raise HTTPException(status_code=400, detail="审批结果无效")
     instance = (
         db.query(ApprovalInstance)
         .filter(ApprovalInstance.business_type == "project", ApprovalInstance.business_id == project.id, ApprovalInstance.status == APPROVAL_PENDING)
@@ -436,8 +441,11 @@ def approve_project(payload: ProjectApproveIn, db: Session = Depends(get_db), us
     if task:
         process_task(db, task.id, payload.result, user, payload.opinion, payload.reason)
     else:
-        project.status = PROJECT_APPROVED if payload.result == "approved" else PROJECT_DRAFT
-    log_action(db, user, "project_approve", f"{project.project_no} {payload.result}")
+        if instance:
+            instance.status = payload.result
+            instance.finish_time = datetime.now()
+        project.status = PROJECT_APPROVED if payload.result == APPROVAL_APPROVED else PROJECT_DRAFT
+    log_action(db, user, "project_approve", f"{project.project_no} {payload.result} {payload.opinion or payload.reason or ''}")
     db.commit()
     return ok(message="审核完成")
 
@@ -495,7 +503,7 @@ def _diff_out(d: ContractDiff) -> dict:
     }
 
 
-def _create_contract_diffs(db: Session, project: Project, contract_id: int, extracted: dict) -> list[ContractDiff]:
+def _create_contract_diffs(db: Session, project: Project, contract_id: int, extracted: dict) -> tuple[list[ContractDiff], list[dict]]:
     comparisons = [
         ("name", "项目名称", project.name, extracted.get("project_name")),
         ("party_a", "甲方/客户", project.party_a or project.customer, extracted.get("party_a") or extracted.get("customer")),
@@ -506,12 +514,16 @@ def _create_contract_diffs(db: Session, project: Project, contract_id: int, extr
         ("project_type", "项目类型", project.project_type, extracted.get("project_type")),
     ]
     created = []
+    unrecognized = []
     for field_name, label, registered, recognized in comparisons:
-        registered_text = str(registered or "")
-        recognized_text = str(recognized or "")
-        if not registered_text and not recognized_text:
+        registered_text = _display_value(db, field_name, registered)
+        recognized_text = _display_value(db, field_name, recognized)
+        if not recognized_text:
+            if registered_text:
+                unrecognized.append({"field_name": field_name, "field_label": label, "registered_value": registered_text})
             continue
-        status = "confirmed" if registered_text == recognized_text else "pending"
+        if _normalize_compare_value(db, field_name, registered_text) == _normalize_compare_value(db, field_name, recognized_text):
+            continue
         diff = ContractDiff(
             project_id=project.id,
             contract_id=contract_id,
@@ -519,13 +531,40 @@ def _create_contract_diffs(db: Session, project: Project, contract_id: int, extr
             field_label=label,
             registered_value=registered_text,
             recognized_value=recognized_text,
-            adopted_value=registered_text if status == "confirmed" else None,
-            diff_status=status,
+            adopted_value=recognized_text,
+            diff_status="pending",
         )
         db.add(diff)
         created.append(diff)
     db.flush()
-    return created
+    return created, unrecognized
+
+
+def _display_value(db: Session, field_name: str, value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if field_name == "amount":
+        try:
+            return f"{Decimal(text.replace(',', '')).quantize(Decimal('0.01'))}"
+        except (InvalidOperation, AttributeError):
+            return text
+    if field_name == "project_type":
+        item = db.query(DictItem).filter(DictItem.dict_type == "project_type", ((DictItem.dict_code == text) | (DictItem.dict_name == text))).first()
+        return item.dict_name if item else text
+    return " ".join(text.split())
+
+
+def _normalize_compare_value(db: Session, field_name: str, value: str) -> str:
+    text = _display_value(db, field_name, value)
+    if field_name == "amount":
+        return text
+    if field_name == "project_type":
+        item = db.query(DictItem).filter(DictItem.dict_type == "project_type", ((DictItem.dict_code == value) | (DictItem.dict_name == value))).first()
+        return (item.dict_name if item else value).strip().lower()
+    return re.sub(r"\s+", "", text).strip().lower()
 
 
 def _apply_diff_value(project: Project, field_name: str, value: str, db: Session) -> None:

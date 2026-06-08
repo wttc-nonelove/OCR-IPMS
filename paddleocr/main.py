@@ -1,12 +1,17 @@
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
+import os
 
 from fastapi import FastAPI, File, UploadFile
 
 app = FastAPI(title="PaddleOCR Service")
 _ocr: Any | None = None
 _load_error: str | None = None
+
+os.environ.setdefault("FLAGS_use_mkldnn", "false")
+os.environ.setdefault("FLAGS_enable_mkldnn", "false")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 
 def get_ocr():
@@ -16,7 +21,16 @@ def get_ocr():
     try:
         from paddleocr import PaddleOCR
 
-        _ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+        _ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang="ch",
+            ocr_version="PP-OCRv3",
+            show_log=False,
+            use_gpu=False,
+            use_mkldnn=False,
+            ir_optim=False,
+            cpu_threads=1,
+        )
         _load_error = None
         return _ocr
     except Exception as exc:  # pragma: no cover - depends on runtime libs

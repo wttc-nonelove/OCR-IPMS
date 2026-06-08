@@ -81,6 +81,13 @@
           <el-button :loading="parsingPdf">选择并解析 PDF/图片合同</el-button>
         </el-upload>
         <el-alert v-if="pdfMessage" :title="pdfMessage" type="info" :closable="false" style="margin-top: 12px" />
+        <el-alert
+          v-if="pdfUnrecognized.length"
+          :title="`以下字段未识别到：${pdfUnrecognized.map((item: any) => item.field_label).join('、')}`"
+          type="warning"
+          :closable="false"
+          style="margin-top: 12px"
+        />
       </section>
     </div>
 
@@ -156,7 +163,8 @@
           <template #default="{ row }">
             <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="editDraft(row)">编辑草稿</el-button>
             <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="submit(row.id)">提交审核</el-button>
-            <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link @click="approve(row.id)">审核通过</el-button>
+            <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link @click="approve(row.id, 'approved')">通过</el-button>
+            <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link type="danger" @click="approve(row.id, 'rejected')">驳回</el-button>
             <el-button v-if="row.status === 'approved' && auth.user?.role === 'admin'" link @click="start(row.id)">确认开始</el-button>
             <el-button link @click="selectProject(row.id)">查看差异</el-button>
           </template>
@@ -168,7 +176,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, type UploadFile } from 'element-plus'
+import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import { http } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 
@@ -186,6 +194,7 @@ const saving = ref(false)
 const saveStatus = ref('')
 const parseMessage = ref('')
 const pdfMessage = ref('')
+const pdfUnrecognized = ref<any[]>([])
 const suppressAutoSave = ref(false)
 const form = reactive<any>({
   id: null,
@@ -235,6 +244,7 @@ async function onPdfFile(upload: UploadFile) {
     data.append('pdf_contract', upload.raw)
     const res: any = await http.post('/project/stamped-contract/parse', data)
     diffs.value = res.data.diffs || []
+    pdfUnrecognized.value = res.data.unrecognized_fields || []
     pdfMessage.value = diffs.value.length ? `识别完成，生成 ${diffs.value.length} 条差异` : '识别完成，未发现差异'
     await load()
   } finally {
@@ -296,6 +306,7 @@ async function newDraft() {
   Object.assign(form, { id: null, project_no: nextNo.value, name: '', party_a: '', party_b: '', amount: '', contract_no: '', sign_date: '', project_type: 'software' })
   selectedProjectId.value = null
   diffs.value = []
+  pdfUnrecognized.value = []
   parseMessage.value = ''
   saveStatus.value = ''
   suppressAutoSave.value = false
@@ -317,6 +328,7 @@ async function loadDiffs() {
   if (!selectedProjectId.value) return
   const res: any = await http.get('/project/diff/list', { params: { project_id: selectedProjectId.value } })
   diffs.value = res.data
+  pdfUnrecognized.value = []
 }
 
 async function confirmDiff(row: any) {
@@ -338,9 +350,22 @@ async function submit(id: number) {
   await Promise.all([load(), loadNextNo()])
 }
 
-async function approve(id: number) {
-  await http.post('/project/approve', { project_id: id, result: 'approved' })
-  ElMessage.success('审核通过')
+async function approve(id: number, result: 'approved' | 'rejected') {
+  let value = ''
+  try {
+    const prompt = await ElMessageBox.prompt(result === 'approved' ? '请输入审批备注' : '请输入驳回原因', result === 'approved' ? '立项审批通过' : '立项审批驳回', {
+      confirmButtonText: result === 'approved' ? '通过' : '驳回',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputValue: result === 'approved' ? '同意立项' : '',
+      inputValidator: (value) => (result === 'approved' || value.trim() ? true : '驳回原因不能为空')
+    })
+    value = prompt.value
+  } catch {
+    return
+  }
+  await http.post('/project/approve', { project_id: id, result, opinion: value, reason: result === 'rejected' ? value : '' })
+  ElMessage.success(result === 'approved' ? '审核通过' : '已驳回')
   await load()
 }
 

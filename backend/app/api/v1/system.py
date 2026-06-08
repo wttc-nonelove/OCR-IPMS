@@ -1,7 +1,11 @@
+import re
+
+import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.entities import DictItem, OcrRecognitionLog, SysLog, User
 from app.schemas.common import ok
@@ -67,4 +71,52 @@ def list_ocr_logs(limit: int = 50, db: Session = Depends(get_db), user: User = D
             }
             for log in logs
         ]
+    )
+
+
+@router.get("/ocr-health")
+def ocr_health(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    settings = get_settings()
+    health_url = re.sub(r"/api/v1/ocr/?$", "/health", settings.paddleocr_url)
+    latest = db.query(OcrRecognitionLog).order_by(OcrRecognitionLog.create_time.desc()).first()
+    service = {
+        "reachable": False,
+        "status": "unreachable",
+        "url": settings.paddleocr_url,
+        "health_url": health_url,
+        "model_loaded": False,
+        "load_error": None,
+        "error": None,
+    }
+    try:
+        response = httpx.get(health_url, timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data", payload)
+        service.update(
+            {
+                "reachable": True,
+                "status": data.get("status") or "ready",
+                "model_loaded": bool(data.get("model_loaded")),
+                "load_error": data.get("load_error"),
+            }
+        )
+    except Exception as exc:
+        service["error"] = str(exc)
+
+    return ok(
+        {
+            "service": service,
+            "latest_log": None
+            if not latest
+            else {
+                "id": latest.id,
+                "file_name": latest.file_name,
+                "recognition_type": latest.recognition_type,
+                "engine": latest.engine,
+                "status": latest.status,
+                "error_message": latest.error_message,
+                "create_time": latest.create_time.isoformat() if latest.create_time else None,
+            },
+        }
     )

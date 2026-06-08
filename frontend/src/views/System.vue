@@ -47,6 +47,25 @@
       <el-empty v-if="!dictGroups.length" description="暂无字典数据" />
     </section>
 
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>PaddleOCR 服务状态</h2>
+          <p>{{ ocrHealthText }}</p>
+        </div>
+        <span class="status" :class="ocrHealthClass">{{ ocrHealthStatus }}</span>
+      </div>
+      <div v-if="ocrHealth" class="dict-grid">
+        <span>服务地址：{{ ocrHealth.service.url }}</span>
+        <span>健康检查：{{ ocrHealth.service.health_url }}</span>
+        <span>模型加载：{{ ocrHealth.service.model_loaded ? '已加载' : '未加载' }}</span>
+        <span v-if="ocrHealth.service.error">服务错误：{{ ocrHealth.service.error }}</span>
+        <span v-if="ocrHealth.service.load_error">模型错误：{{ ocrHealth.service.load_error }}</span>
+        <span v-if="ocrHealth.latest_log">最近识别：{{ ocrHealth.latest_log.status }} / {{ ocrHealth.latest_log.file_name || '-' }}</span>
+      </div>
+      <el-empty v-else description="暂无 OCR 健康状态" />
+    </section>
+
     <div class="content-grid">
       <section class="panel">
         <div class="panel-head">
@@ -88,6 +107,7 @@ const dicts = ref<any[]>([])
 const templates = ref<any[]>([])
 const logs = ref<any[]>([])
 const ocrLogs = ref<any[]>([])
+const ocrHealth = ref<any>(null)
 
 const dictGroups = computed(() => {
   const groups: Record<string, string[]> = {}
@@ -96,6 +116,28 @@ const dictGroups = computed(() => {
     groups[item.dict_type].push(item.dict_name)
   })
   return Object.entries(groups).map(([type, items]) => ({ type, items }))
+})
+
+const ocrHealthStatus = computed(() => {
+  if (!ocrHealth.value) return '未知'
+  if (!ocrHealth.value.service.reachable) return '服务不可达'
+  if (ocrHealth.value.latest_log?.status === 'failed') return '最近识别失败'
+  if (!ocrHealth.value.service.model_loaded) return '服务可达'
+  return '正常'
+})
+
+const ocrHealthClass = computed(() => {
+  if (!ocrHealth.value?.service?.reachable) return 'danger'
+  if (ocrHealth.value.latest_log?.status === 'failed') return 'warn'
+  return 'ok'
+})
+
+const ocrHealthText = computed(() => {
+  if (!ocrHealth.value) return '正在读取服务健康状态'
+  if (!ocrHealth.value.service.reachable) return 'PaddleOCR HTTP 服务不可达，请检查容器状态'
+  if (ocrHealth.value.service.load_error) return '服务可达，但模型加载存在错误'
+  if (ocrHealth.value.latest_log?.status === 'failed') return '服务可达，但最近一次识别失败，请查看 OCR 日志'
+  return '服务可达，OCR 日志用于展示识别历史'
 })
 
 function roleText(role: Role) {
@@ -107,18 +149,20 @@ function businessTypeText(type: string) {
 }
 
 async function load() {
-  const [userRes, dictRes, templateRes, logRes, ocrRes]: any[] = await Promise.all([
+  const [userRes, dictRes, templateRes, logRes, ocrRes, healthRes]: any[] = await Promise.all([
     http.get('/user/list'),
     http.get('/system/dicts'),
     http.get('/approval/template/list'),
     http.get('/system/logs'),
-    http.get('/system/ocr-logs')
+    http.get('/system/ocr-logs'),
+    http.get('/system/ocr-health')
   ])
   users.value = userRes.data
   dicts.value = dictRes.data
   templates.value = templateRes.data
   logs.value = logRes.data
   ocrLogs.value = ocrRes.data
+  ocrHealth.value = healthRes.data
 }
 
 onMounted(load)
