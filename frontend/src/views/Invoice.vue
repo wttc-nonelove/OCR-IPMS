@@ -22,8 +22,20 @@
             <el-input v-model="invoice.invoice_no" placeholder="全局唯一" />
           </label>
           <label>
-            开票金额
-            <el-input v-model="invoice.amount" placeholder="开票金额" />
+            不含税金额
+            <el-input v-model="invoice.amount_without_tax" placeholder="发票金额栏" />
+          </label>
+          <label>
+            税率（%）
+            <el-input v-model="invoice.tax_rate" placeholder="如 13" />
+          </label>
+          <label>
+            税额
+            <el-input v-model="invoice.tax_amount" placeholder="发票税额栏" />
+          </label>
+          <label>
+            价税合计
+            <el-input v-model="invoice.amount" placeholder="发票价税合计" />
           </label>
           <label>
             开票日期
@@ -169,7 +181,16 @@
       </div>
       <el-table :data="invoices" empty-text="暂无发票记录">
         <el-table-column prop="invoice_no" label="发票号码" />
-        <el-table-column label="金额">
+        <el-table-column label="不含税金额" width="120">
+          <template #default="{ row }">{{ money(row.amount_without_tax) }}</template>
+        </el-table-column>
+        <el-table-column label="税率" width="80">
+          <template #default="{ row }">{{ row.tax_rate ? `${row.tax_rate}%` : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="税额" width="110">
+          <template #default="{ row }">{{ money(row.tax_amount) }}</template>
+        </el-table-column>
+        <el-table-column label="价税合计" width="120">
           <template #default="{ row }">{{ money(row.amount) }}</template>
         </el-table-column>
         <el-table-column prop="invoice_date" label="开票日期" />
@@ -206,7 +227,7 @@ const ocrStatus = ref('')
 const paymentOcrStatus = ref('')
 const invoiceRecognizing = ref(false)
 const paymentRecognizing = ref(false)
-const invoice = reactive({ project_id: '', invoice_no: '', amount: '', invoice_date: '', invoice_type: 'special', buyer: '', seller: '' })
+const invoice = reactive({ project_id: '', invoice_no: '', amount: '', amount_without_tax: '', tax_rate: '', tax_amount: '', invoice_date: '', invoice_type: 'special', buyer: '', seller: '' })
 const payment = reactive({ project_id: '', invoice_id: '', amount: '', payment_date: '', payment_method: 'bank', remark: '' })
 const summary = reactive<any>({ project_id: null, contract_amount: 0, invoiced_amount: 0, paid_amount: 0, receivable: 0, remaining_invoice_amount: 0, invoice_progress: 0, payment_progress: 0 })
 const invoiceTotal = ref(0)
@@ -263,6 +284,9 @@ async function recognizeInvoice() {
     const extracted = res.data.extracted_info || {}
     invoice.invoice_no = extracted.invoice_no || invoice.invoice_no
     invoice.amount = extracted.amount || invoice.amount
+    invoice.amount_without_tax = extracted.amount_without_tax || invoice.amount_without_tax
+    invoice.tax_rate = extracted.tax_rate || invoice.tax_rate
+    invoice.tax_amount = extracted.tax_amount || invoice.tax_amount
     invoice.invoice_date = extracted.invoice_date || invoice.invoice_date
     invoice.buyer = extracted.buyer || invoice.buyer
     invoice.seller = extracted.seller || invoice.seller

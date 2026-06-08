@@ -23,7 +23,8 @@ def calculate_receivable(db: Session, project_id: int) -> dict:
     return {"invoiced_amount": float(invoiced), "paid_amount": float(paid), "receivable": float(receivable), "balance_status": balance}
 
 
-def validate_invoice_amount(db: Session, project_id: int, amount: Decimal) -> Project:
+def validate_invoice_amount(db: Session, project_id: int, amount_without_tax: Decimal) -> Project:
+    """校验开票金额，使用不含税金额与合同金额比较"""
     project = db.query(Project).filter(Project.id == project_id).with_for_update().first()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
@@ -31,9 +32,10 @@ def validate_invoice_amount(db: Session, project_id: int, amount: Decimal) -> Pr
         raise HTTPException(status_code=400, detail="已结项项目不可开票")
     if project.status not in {PROJECT_APPROVED, PROJECT_ACTIVE}:
         raise HTTPException(status_code=400, detail="仅已立项或进行中项目允许开票")
-    invoiced = db.query(func.coalesce(func.sum(Invoice.amount), 0)).filter(Invoice.project_id == project_id).scalar() or Decimal("0")
-    if project.amount > 0 and invoiced + amount > project.amount:
-        raise HTTPException(status_code=400, detail="开票金额超过合同金额")
+    # 用不含税金额累计校验
+    invoiced_without_tax = db.query(func.coalesce(func.sum(Invoice.amount_without_tax), 0)).filter(Invoice.project_id == project_id).scalar() or Decimal("0")
+    if project.amount > 0 and invoiced_without_tax + amount_without_tax > project.amount:
+        raise HTTPException(status_code=400, detail="开票不含税金额超过合同金额")
     return project
 
 

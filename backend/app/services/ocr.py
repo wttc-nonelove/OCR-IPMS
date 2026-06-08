@@ -204,9 +204,34 @@ def _extract_contract(text: str) -> dict:
 
 def _extract_invoice(text: str) -> dict:
     text = _normalize_text(text)
+    # 价税合计（发票总金额）
+    amount = _extract_amount(text, ["价税合计", "合计金额", "发票金额", "开票金额"])
+    # 不含税金额（发票上的"金额"栏）
+    amount_without_tax = _extract_amount(text, ["金额"])
+    # 税额
+    tax_amount = _extract_amount(text, ["税额"])
+    # 税率（百分比文本，如 "13%"）
+    tax_rate = ""
+    rate_match = re.search(r"税率?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%", text)
+    if rate_match:
+        tax_rate = rate_match.group(1)
+    else:
+        # 尝试从税额和不含税金额反算税率
+        if tax_amount and amount_without_tax:
+            try:
+                ta = Decimal(tax_amount)
+                awt = Decimal(amount_without_tax)
+                if awt > 0:
+                    tax_rate = f"{(ta / awt * 100).quantize(Decimal('0.01'))}"
+            except (InvalidOperation, ZeroDivisionError):
+                pass
+
     return {
         "invoice_no": _extract_invoice_no(text),
-        "amount": _extract_amount(text, ["价税合计", "合计金额", "发票金额", "开票金额", "金额", "人民币"]),
+        "amount": amount,
+        "amount_without_tax": amount_without_tax,
+        "tax_rate": tax_rate,
+        "tax_amount": tax_amount,
         "invoice_date": _extract_date(text),
         "buyer": _match_after(text, ["购买方名称", "购买方", "购方", "买方"]),
         "seller": _match_after(text, ["销售方名称", "销售方", "销方", "卖方"]),

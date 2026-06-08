@@ -260,7 +260,7 @@ def project_detail(project_id: int, db: Session = Depends(get_db), user: User = 
         "project": ProjectOut.model_validate(project).model_dump(),
         "contracts": [{"id": c.id, "version": c.version, "file_type": c.file_type, "file_name": c.file_name, "upload_time": c.upload_time.isoformat()} for c in contracts],
         "diffs": [diff_out(d) for d in diffs],
-        "invoices": [{"id": i.id, "invoice_no": i.invoice_no, "amount": float(i.amount), "invoice_date": i.invoice_date.isoformat(), "invoice_type": i.invoice_type} for i in invoices],
+        "invoices": [{"id": i.id, "invoice_no": i.invoice_no, "amount": float(i.amount), "amount_without_tax": float(i.amount_without_tax), "tax_rate": float(i.tax_rate), "tax_amount": float(i.tax_amount), "invoice_date": i.invoice_date.isoformat(), "invoice_type": i.invoice_type} for i in invoices],
         "payments": [{"id": p.id, "invoice_id": p.invoice_id, "amount": float(p.amount), "payment_date": p.payment_date.isoformat(), "payment_method": p.payment_method} for p in payments],
         "closes": [{"id": c.id, "close_time": c.close_time.isoformat(), "status": c.status, "balance_status": c.balance_status} for c in closes],
         "receivable": calculate_receivable(db, project_id),
