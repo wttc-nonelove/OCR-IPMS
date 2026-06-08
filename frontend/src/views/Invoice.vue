@@ -209,6 +209,8 @@ const paymentRecognizing = ref(false)
 const invoice = reactive({ project_id: '', invoice_no: '', amount: '', invoice_date: '', invoice_type: 'special', buyer: '', seller: '' })
 const payment = reactive({ project_id: '', invoice_id: '', amount: '', payment_date: '', payment_method: 'bank', remark: '' })
 const summary = reactive<any>({ project_id: null, contract_amount: 0, invoiced_amount: 0, paid_amount: 0, receivable: 0, remaining_invoice_amount: 0, invoice_progress: 0, payment_progress: 0 })
+const invoiceTotal = ref(0)
+const paymentTotal = ref(0)
 
 async function onInvoiceFile(upload: any) {
   invoiceFile.value = upload.raw
@@ -240,12 +242,14 @@ async function refreshFinance(projectId?: number | string) {
   if (!id) return
   const [summaryRes, invoiceRes, paymentRes]: any[] = await Promise.all([
     http.get('/finance/summary', { params: { project_id: id } }),
-    http.get('/invoice/list', { params: { project_id: id } }),
-    http.get('/payment/list', { params: { project_id: id } })
+    http.get('/invoice/list', { params: { project_id: id, page_size: 100 } }),
+    http.get('/payment/list', { params: { project_id: id, page_size: 100 } })
   ])
   Object.assign(summary, summaryRes.data || {})
-  invoices.value = invoiceRes.data
-  payments.value = paymentRes.data
+  invoices.value = invoiceRes.data.items
+  invoiceTotal.value = invoiceRes.data.total
+  payments.value = paymentRes.data.items
+  paymentTotal.value = paymentRes.data.total
 }
 
 async function recognizeInvoice() {

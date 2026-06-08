@@ -178,6 +178,17 @@
           </template>
         </el-table-column>
       </el-table>
+      <div class="pagination-wrap">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @current-change="onPageChange"
+          @size-change="onPageSizeChange"
+        />
+      </div>
     </section>
   </section>
 </template>
@@ -194,6 +205,9 @@ const diffs = ref<any[]>([])
 const projectTypes = ref<any[]>([])
 const keyword = ref('')
 const status = ref('')
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
 const nextNo = ref('')
 const selectedProjectId = ref<number | null>(null)
 const parsingWord = ref(false)
@@ -290,8 +304,21 @@ async function loadCurrentDraft() {
 }
 
 async function load() {
-  const res: any = await http.get('/project/list', { params: { keyword: keyword.value || undefined, status: status.value || undefined } })
-  projects.value = res.data.map((item: any) => ({ ...item, party_a: item.party_a || item.customer }))
+  const res: any = await http.get('/project/list', { params: { keyword: keyword.value || undefined, status: status.value || undefined, page: page.value, page_size: pageSize.value } })
+  const data = res.data
+  projects.value = data.items.map((item: any) => ({ ...item, party_a: item.party_a || item.customer }))
+  total.value = data.total
+}
+
+function onPageChange(newPage: number) {
+  page.value = newPage
+  load()
+}
+
+function onPageSizeChange(newSize: number) {
+  pageSize.value = newSize
+  page.value = 1
+  load()
 }
 
 async function saveDraft(showMessage = false) {

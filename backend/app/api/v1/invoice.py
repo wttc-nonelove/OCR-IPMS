@@ -5,11 +5,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_roles
+from app.api.deps import Pagination, get_pagination, require_roles
 from app.db.session import get_db
 from app.models.entities import Invoice, User
 from app.models.enums import ADMIN, FINANCE
-from app.schemas.common import ok
+from app.schemas.common import ok, paginated
 from app.services.audit import log_action
 from app.services.approval import create_approval_instance
 from app.services.files import save_upload
@@ -20,11 +20,17 @@ router = APIRouter(prefix="/invoice", tags=["invoice"])
 
 
 @router.get("/list")
-def list_invoices(project_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(require_roles(FINANCE, ADMIN))):
+def list_invoices(
+    project_id: int | None = None,
+    pg: Pagination = Depends(get_pagination),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(FINANCE, ADMIN)),
+):
     query = db.query(Invoice)
     if project_id:
         query = query.filter(Invoice.project_id == project_id)
-    return ok([
+    total = query.count()
+    items = [
         {
             "id": i.id,
             "project_id": i.project_id,
@@ -36,8 +42,9 @@ def list_invoices(project_id: int | None = None, db: Session = Depends(get_db), 
             "seller": i.seller,
             "create_time": i.create_time.isoformat() if i.create_time else None,
         }
-        for i in query.order_by(Invoice.create_time.desc()).all()
-    ])
+        for i in query.order_by(Invoice.create_time.desc()).offset(pg.offset).limit(pg.limit).all()
+    ]
+    return paginated(items, total, pg.page, pg.page_size)
 
 
 @router.post("/create")

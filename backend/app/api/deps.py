@@ -1,4 +1,6 @@
-from fastapi import Depends, HTTPException, status
+from dataclasses import dataclass
+
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -31,3 +33,25 @@ def require_roles(*roles: str):
         return user
 
     return checker
+
+
+@dataclass
+class Pagination:
+    """分页参数"""
+    page: int = 1
+    page_size: int = 20
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.page_size
+
+    @property
+    def limit(self) -> int:
+        return self.page_size
+
+
+def get_pagination(
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+) -> Pagination:
+    return Pagination(page=page, page_size=page_size)

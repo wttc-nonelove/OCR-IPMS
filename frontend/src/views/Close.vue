@@ -161,7 +161,7 @@ async function loadProjects() {
 
 async function load() {
   const [closeRes, taskRes]: any[] = await Promise.all([http.get('/close/list'), http.get('/approval/task/list')])
-  items.value = closeRes.data
+  items.value = closeRes.data.items
   tasks.value = taskRes.data.filter((task: any) => task.business_type === 'close')
 }
 

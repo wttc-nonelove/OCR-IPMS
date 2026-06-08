@@ -4,11 +4,11 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_roles
+from app.api.deps import Pagination, get_pagination, require_roles
 from app.db.session import get_db
 from app.models.entities import Payment, User
 from app.models.enums import ADMIN, FINANCE
-from app.schemas.common import ok
+from app.schemas.common import ok, paginated
 from app.services.audit import log_action
 from app.services.files import save_upload
 from app.services.finance import calculate_receivable, validate_payment_amount
@@ -17,11 +17,17 @@ router = APIRouter(prefix="/payment", tags=["payment"])
 
 
 @router.get("/list")
-def list_payments(project_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(require_roles(FINANCE, ADMIN))):
+def list_payments(
+    project_id: int | None = None,
+    pg: Pagination = Depends(get_pagination),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(FINANCE, ADMIN)),
+):
     query = db.query(Payment)
     if project_id:
         query = query.filter(Payment.project_id == project_id)
-    return ok([
+    total = query.count()
+    items = [
         {
             "id": p.id,
             "project_id": p.project_id,
@@ -34,8 +40,9 @@ def list_payments(project_id: int | None = None, db: Session = Depends(get_db), 
             "voucher_file": p.voucher_file,
             "create_time": p.create_time.isoformat() if p.create_time else None,
         }
-        for p in query.order_by(Payment.create_time.desc()).all()
-    ])
+        for p in query.order_by(Payment.create_time.desc()).offset(pg.offset).limit(pg.limit).all()
+    ]
+    return paginated(items, total, pg.page, pg.page_size)
 
 
 @router.post("/create")
