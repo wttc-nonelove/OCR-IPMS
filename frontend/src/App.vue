@@ -20,9 +20,9 @@
       <section class="side-panel">
         <span class="panel-label">当前审批流</span>
         <ol class="mini-flow">
-          <li class="done">业务提交</li>
-          <li class="current">{{ flowCurrent }}</li>
-          <li>{{ flowNext }}</li>
+          <li v-for="step in flowSteps" :key="step.label" :class="{ done: step.status === 'done', current: step.status === 'current' }">
+            {{ step.label }}
+          </li>
         </ol>
       </section>
     </el-aside>
@@ -49,9 +49,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Checked, Coin, DataAnalysis, FolderOpened, HomeFilled, Setting } from '@element-plus/icons-vue'
+import { http } from './api/http'
 import { roleNames, roleRoutes, useAuthStore } from './stores/auth'
 
 const auth = useAuthStore()
@@ -75,21 +76,46 @@ const currentMenu = computed(() => allMenus.find((item) => item.name === route.n
 const routeTitle = computed(() => currentMenu.value?.label || '系统')
 const routeSubtitle = computed(() => currentMenu.value?.subtitle || '智能项目管理系统')
 const currentRoleName = computed(() => (auth.user ? roleNames[auth.user.role] : '未登录'))
-const flowCurrent = computed(() => {
-  if (route.name === 'invoice') return '财务登记'
-  if (route.name === 'close') return '财务审批'
-  if (route.name === 'system') return '模板配置'
-  return '管理员审核'
+const remoteFlow = ref<any>(null)
+const defaultFlowSteps = computed(() => {
+  if (route.name === 'invoice') return [
+    { label: '开票登记', status: 'done' },
+    { label: '金额校验', status: 'current' },
+    { label: '审批/完成', status: 'pending' }
+  ]
+  if (route.name === 'close') return [
+    { label: '提交结项', status: 'done' },
+    { label: '财务审批', status: 'current' },
+    { label: '已结项', status: 'pending' }
+  ]
+  if (route.name === 'project') return [
+    { label: '草稿', status: 'done' },
+    { label: '待审核', status: 'current' },
+    { label: '已立项/进行中', status: 'pending' }
+  ]
+  return [
+    { label: '业务提交', status: 'done' },
+    { label: '节点处理', status: 'current' },
+    { label: '流程完成', status: 'pending' }
+  ]
 })
-const flowNext = computed(() => {
-  if (route.name === 'invoice') return '金额校验'
-  if (route.name === 'close') return '已结项只读'
-  if (route.name === 'system') return '权限生效'
-  return '项目已立项'
-})
+const flowSteps = computed(() => (remoteFlow.value?.has_todo && remoteFlow.value.steps?.length ? remoteFlow.value.steps : defaultFlowSteps.value))
+
+async function loadFlow() {
+  if (!auth.isLoggedIn) return
+  try {
+    const res: any = await http.get('/approval/flow/current')
+    remoteFlow.value = res.data
+  } catch {
+    remoteFlow.value = null
+  }
+}
 
 function logout() {
   auth.logout()
   router.push('/login')
 }
+
+onMounted(loadFlow)
+watch(() => route.fullPath, loadFlow)
 </script>

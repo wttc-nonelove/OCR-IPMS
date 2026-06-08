@@ -26,12 +26,17 @@ def _extract_date(text: str) -> str | None:
 def _extract_contract(text: str) -> dict:
     amount = _extract_amount(text)
     contract_no = re.search(r"(HT[-_A-Za-z0-9]{4,})", text, re.I)
+    party_a = _match_after(text, ["甲方", "委托方", "采购方", "客户名称", "客户"]) or ""
+    party_b = _match_after(text, ["乙方", "承包方", "服务方", "供应商"]) or ""
     return {
         "project_name": _match_after(text, ["项目名称", "项目名"]) or "",
         "contract_amount": amount or "",
         "contract_no": contract_no.group(1) if contract_no else "",
         "sign_date": _extract_date(text) or "",
-        "party_a": _match_after(text, ["甲方", "客户名称", "客户"]) or "",
+        "party_a": party_a,
+        "party_b": party_b,
+        "customer": party_a,
+        "project_type": _match_after(text, ["项目类型", "业务类型", "服务类型", "合同类型"]) or "",
     }
 
 
@@ -47,8 +52,17 @@ def _extract_invoice(text: str) -> dict:
 
 
 def _match_after(text: str, labels: list[str]) -> str | None:
+    for line in re.split(r"[\n\r]+", text):
+        normalized = line.strip()
+        for label in labels:
+            for separator in ("：", ":", "？", "?", " "):
+                prefix = f"{label}{separator}"
+                if normalized.startswith(prefix):
+                    value = normalized[len(prefix) :].strip(" \t，,;；?？")
+                    if value:
+                        return value[:80]
     for label in labels:
-        match = re.search(rf"{label}[:：\s]*([^\n\r，,;；]{{2,80}})", text)
+        match = re.search(rf"{re.escape(label)}[:：\s]*([^\n\r，,;；]{{2,80}})", text)
         if match:
             return match.group(1).strip()
     return None
@@ -123,35 +137,33 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
         confidence = _confidence_for(info, base_confidence)
         duration = time.perf_counter() - start
         status = "success" if raw_text else "manual_required"
-        db.add(
-            OcrRecognitionLog(
-                file_path=file_path,
-                file_name=path.name,
-                recognition_type=recognition_type,
-                engine=engine,
-                raw_result=json.dumps(raw_result, ensure_ascii=False),
-                extracted_info=json.dumps(info, ensure_ascii=False),
-                confidence=base_confidence,
-                status=status,
-                duration=duration,
-            )
+        log = OcrRecognitionLog(
+            file_path=file_path,
+            file_name=path.name,
+            recognition_type=recognition_type,
+            engine=engine,
+            raw_result=json.dumps(raw_result, ensure_ascii=False),
+            extracted_info=json.dumps(info, ensure_ascii=False),
+            confidence=base_confidence,
+            status=status,
+            duration=duration,
         )
+        db.add(log)
         db.flush()
-        return {"raw_text": raw_text[:2000], "extracted_info": info, "confidence": confidence, "engine": engine, "duration": duration, "status": status}
+        return {"log_id": log.id, "raw_text": raw_text[:2000], "extracted_info": info, "confidence": confidence, "engine": engine, "duration": duration, "status": status}
     except Exception as exc:
         duration = time.perf_counter() - start
-        db.add(
-            OcrRecognitionLog(
-                file_path=file_path,
-                file_name=path.name,
-                recognition_type=recognition_type,
-                engine=engine,
-                extracted_info=json.dumps({}, ensure_ascii=False),
-                confidence=0,
-                status="failed",
-                duration=duration,
-                error_message=str(exc),
-            )
+        log = OcrRecognitionLog(
+            file_path=file_path,
+            file_name=path.name,
+            recognition_type=recognition_type,
+            engine=engine,
+            extracted_info=json.dumps({}, ensure_ascii=False),
+            confidence=0,
+            status="failed",
+            duration=duration,
+            error_message=str(exc),
         )
+        db.add(log)
         db.flush()
-        return {"raw_text": "", "extracted_info": {}, "confidence": {}, "engine": engine, "duration": duration, "status": "failed", "error_message": str(exc)}
+        return {"log_id": log.id, "raw_text": "", "extracted_info": {}, "confidence": {}, "engine": engine, "duration": duration, "status": "failed", "error_message": str(exc)}
