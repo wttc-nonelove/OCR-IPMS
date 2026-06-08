@@ -1,0 +1,21 @@
+ADMIN = "admin"
+BUSINESS = "business"
+FINANCE = "finance"
+PM = "pm"
+
+PROJECT_DRAFT = "draft"
+PROJECT_PENDING = "pending"
+PROJECT_APPROVED = "approved"
+PROJECT_ACTIVE = "active"
+PROJECT_CLOSED = "closed"
+PROJECT_TERMINATED = "terminated"
+PROJECT_FRAMEWORK = "framework"
+
+APPROVAL_PENDING = "pending"
+APPROVAL_APPROVED = "approved"
+APPROVAL_REJECTED = "rejected"
+APPROVAL_CANCELLED = "cancelled"
+
+BALANCE_SETTLED = "已结清"
+BALANCE_PARTIAL = "部分回款"
+BALANCE_WAITING = "待回款"

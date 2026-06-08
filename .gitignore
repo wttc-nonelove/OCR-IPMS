@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Temporary files
+.tmp_*
+*.tmp
+importtime_*.txt
+
+# Node.js
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads (user data)
+uploads/
+backend/uploads/
+
+# Docker
+docker/data/
+
+# Logs
+*.log
+logs/
+
+# Cache
+.npm-cache/
+.cache/

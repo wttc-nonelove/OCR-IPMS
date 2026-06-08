@@ -1,0 +1,1008 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>智能项目管理系统 - HTML 原型</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <section class="login-screen" id="login-screen">
+      <div class="login-card">
+        <div class="login-copy">
+          <div class="brand-mark">PM</div>
+          <h1>智能项目管理系统</h1>
+          <p>请使用对应身份登录。系统会按 RBAC 权限展示该身份可见的页面和功能。</p>
+        </div>
+        <form class="login-form" id="login-form">
+          <label>
+            用户身份
+            <select id="login-role">
+              <option value="admin">管理员</option>
+              <option value="business">商务</option>
+              <option value="finance">财务</option>
+              <option value="pm">项目经理</option>
+            </select>
+          </label>
+          <label>
+            用户名
+            <input id="login-name" value="admin" />
+          </label>
+          <label>
+            密码
+            <input type="password" value="123456" />
+          </label>
+          <button class="primary-btn" type="submit">登录进入原型</button>
+        </form>
+        <div class="login-role-grid">
+          <button type="button" class="login-role active" data-login-role="admin">
+            <strong>管理员</strong>
+            <span>立项审核、系统管理、全量查询</span>
+          </button>
+          <button type="button" class="login-role" data-login-role="business">
+            <strong>商务</strong>
+            <span>合同 OCR、立项登记、差异确认</span>
+          </button>
+          <button type="button" class="login-role" data-login-role="finance">
+            <strong>财务</strong>
+            <span>开票登记、回款登记、结项审核</span>
+          </button>
+          <button type="button" class="login-role" data-login-role="pm">
+            <strong>项目经理</strong>
+            <span>项目跟踪、验收报告、结项申请</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="app-shell" id="app-shell" aria-hidden="true" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">PM</div>
+          <div>
+            <strong>智能项目管理</strong>
+            <span>OCR/NLP 项目全周期</span>
+          </div>
+        </div>
+
+        <nav class="nav-list" aria-label="主导航">
+          <button class="nav-item active" data-page="dashboard">
+            <span class="nav-icon">⌂</span>
+            <span>工作台</span>
+          </button>
+          <button class="nav-item" data-page="project">
+            <span class="nav-icon">◇</span>
+            <span>立项管理</span>
+          </button>
+          <button class="nav-item" data-page="invoice">
+            <span class="nav-icon">￥</span>
+            <span>开票回款</span>
+          </button>
+          <button class="nav-item" data-page="close">
+            <span class="nav-icon">✓</span>
+            <span>结项管理</span>
+          </button>
+          <button class="nav-item" data-page="report">
+            <span class="nav-icon">▦</span>
+            <span>查询报表</span>
+          </button>
+          <button class="nav-item" data-page="system">
+            <span class="nav-icon">⚙</span>
+            <span>系统管理</span>
+          </button>
+        </nav>
+
+        <section class="side-panel">
+          <span class="panel-label">当前审批流</span>
+          <ol class="mini-flow">
+            <li class="done">商务提交</li>
+            <li class="current">管理员审核</li>
+            <li>项目已立项</li>
+          </ol>
+        </section>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="page-title">工作台</h1>
+            <p id="page-subtitle">多角色协同、待办审批、项目经营指标总览</p>
+          </div>
+          <div class="top-actions">
+            <label class="role-switch">
+              <span>角色</span>
+              <select id="role-select">
+                <option value="admin">管理员</option>
+                <option value="business">商务</option>
+                <option value="finance">财务</option>
+                <option value="pm">项目经理</option>
+              </select>
+            </label>
+            <button class="ghost-btn" type="button" id="notify-btn">审批通知 6</button>
+            <button class="primary-btn" type="button" data-page-jump="project" data-roles="business">新建立项</button>
+            <button class="ghost-btn" type="button" id="logout-btn">退出</button>
+          </div>
+        </header>
+
+        <section class="page active" id="dashboard">
+          <div class="metric-grid">
+            <article class="metric-card">
+              <span>项目总数</span>
+              <strong>128</strong>
+              <small>本月新增 12 个</small>
+            </article>
+            <article class="metric-card">
+              <span>进行中项目</span>
+              <strong>42</strong>
+              <small>较上月 +8.3%</small>
+            </article>
+            <article class="metric-card">
+              <span>本月开票金额</span>
+              <strong>¥ 286.5 万</strong>
+              <small>达成年度计划 64%</small>
+            </article>
+            <article class="metric-card">
+              <span>本月回款金额</span>
+              <strong>¥ 219.8 万</strong>
+              <small>应收余额 66.7 万</small>
+            </article>
+          </div>
+
+          <section class="panel role-overview">
+            <div class="panel-head">
+              <div>
+                <h2>角色页面面板总览</h2>
+                <p>管理员、商务、财务、项目经理的登录首页与核心操作入口</p>
+              </div>
+              <span class="badge" id="active-role-badge">当前查看：管理员</span>
+            </div>
+            <div class="role-panel-grid">
+              <article class="role-panel active" data-role-panel="admin" data-roles="admin">
+                <div class="role-panel-head">
+                  <div>
+                    <span class="role-label">管理员</span>
+                    <h3>审核与系统治理</h3>
+                  </div>
+                  <span class="role-count danger">6 待办</span>
+                </div>
+                <div class="role-stats">
+                  <div><strong>4</strong><span>待审核立项</span></div>
+                  <div><strong>2</strong><span>待归档结项</span></div>
+                  <div><strong>12</strong><span>审批流模板</span></div>
+                </div>
+                <ul class="role-task-list">
+                  <li>批量审核立项申请，填写通过或驳回意见</li>
+                  <li>维护用户、角色、数据字典和审批超时规则</li>
+                  <li>查看系统日志，追溯合同、发票、结项操作</li>
+                </ul>
+                <div class="role-actions">
+                  <button type="button" data-page-jump="project">立项审核</button>
+                  <button type="button" data-page-jump="system">系统配置</button>
+                </div>
+              </article>
+
+              <article class="role-panel" data-role-panel="business" data-roles="business">
+                <div class="role-panel-head">
+                  <div>
+                    <span class="role-label">商务</span>
+                    <h3>合同与立项办理</h3>
+                  </div>
+                  <span class="role-count warn">3 草稿</span>
+                </div>
+                <div class="role-stats">
+                  <div><strong>7</strong><span>本月立项</span></div>
+                  <div><strong>5</strong><span>合同待校验</span></div>
+                  <div><strong>95%</strong><span>OCR 准确率</span></div>
+                </div>
+                <ul class="role-task-list">
+                  <li>上传 Word 合同，OCR/NLP 自动提取项目字段</li>
+                  <li>上传盖章 PDF，确认差异清单后提交审核</li>
+                  <li>维护草稿项目，处理管理员驳回意见</li>
+                </ul>
+                <div class="role-actions">
+                  <button type="button" data-page-jump="project">合同 OCR</button>
+                  <button type="button" data-page-jump="project">差异确认</button>
+                </div>
+              </article>
+
+              <article class="role-panel" data-role-panel="finance" data-roles="finance">
+                <div class="role-panel-head">
+                  <div>
+                    <span class="role-label">财务</span>
+                    <h3>开票回款与结项审核</h3>
+                  </div>
+                  <span class="role-count info">9 单据</span>
+                </div>
+                <div class="role-stats">
+                  <div><strong>¥286万</strong><span>本月开票</span></div>
+                  <div><strong>¥219万</strong><span>本月回款</span></div>
+                  <div><strong>2</strong><span>结项待审</span></div>
+                </div>
+                <ul class="role-task-list">
+                  <li>上传发票图片或 PDF，识别号码、金额、购销方</li>
+                  <li>登记多次回款，自动关联项目和开票记录</li>
+                  <li>审核结项申请，确认尾款状态和历史单据</li>
+                </ul>
+                <div class="role-actions">
+                  <button type="button" data-page-jump="invoice">发票识别</button>
+                  <button type="button" data-page-jump="close">结项审核</button>
+                </div>
+              </article>
+
+              <article class="role-panel" data-role-panel="pm" data-roles="pm">
+                <div class="role-panel-head">
+                  <div>
+                    <span class="role-label">项目经理</span>
+                    <h3>项目跟踪与结项申请</h3>
+                  </div>
+                  <span class="role-count">5 项目</span>
+                </div>
+                <div class="role-stats">
+                  <div><strong>5</strong><span>负责项目</span></div>
+                  <div><strong>2</strong><span>待提交结项</span></div>
+                  <div><strong>1</strong><span>驳回补充</span></div>
+                </div>
+                <ul class="role-task-list">
+                  <li>查看项目状态、合同金额、开票和回款进度</li>
+                  <li>上传验收报告，填写结项说明并提交审批</li>
+                  <li>结项驳回后补充材料并重新发起流程</li>
+                </ul>
+                <div class="role-actions">
+                  <button type="button" data-page-jump="close">提交结项</button>
+                  <button type="button" data-page-jump="project">项目详情</button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <div class="content-grid dashboard-grid">
+            <section class="panel panel-wide">
+              <div class="panel-head">
+                <div>
+                  <h2>项目全生命周期</h2>
+                  <p>立项、开票回款、结项状态按业务规则流转</p>
+                </div>
+                <button class="ghost-btn small" type="button">查看全部</button>
+              </div>
+              <div class="lifecycle">
+                <div class="life-step done">
+                  <span>01</span>
+                  <strong>草稿</strong>
+                  <small>商务编辑合同信息</small>
+                </div>
+                <div class="life-step current">
+                  <span>02</span>
+                  <strong>待审核</strong>
+                  <small>管理员审批立项</small>
+                </div>
+                <div class="life-step">
+                  <span>03</span>
+                  <strong>已立项</strong>
+                  <small>允许开票回款</small>
+                </div>
+                <div class="life-step">
+                  <span>04</span>
+                  <strong>进行中</strong>
+                  <small>项目执行与财务跟踪</small>
+                </div>
+                <div class="life-step">
+                  <span>05</span>
+                  <strong>已结项</strong>
+                  <small>只读归档，可撤回</small>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel" data-roles="admin,business,finance,pm">
+              <div class="panel-head">
+                <h2>待办事项</h2>
+                <span class="badge danger" id="todo-badge">6</span>
+              </div>
+              <div class="todo-list">
+                <button class="todo-item" data-page-jump="project" data-roles="admin">
+                  <span class="dot warn"></span>
+                  <div>
+                    <strong>待审核立项</strong>
+                    <small>4 个项目等待管理员审核</small>
+                  </div>
+                </button>
+                <button class="todo-item" data-page-jump="project" data-roles="business">
+                  <span class="dot warn"></span>
+                  <div>
+                    <strong>合同差异待确认</strong>
+                    <small>5 份盖章 PDF 合同需要人工确认</small>
+                  </div>
+                </button>
+                <button class="todo-item" data-page-jump="close" data-roles="finance">
+                  <span class="dot danger"></span>
+                  <div>
+                    <strong>待审核结项</strong>
+                    <small>2 个结项申请需财务确认</small>
+                  </div>
+                </button>
+                <button class="todo-item" data-page-jump="invoice" data-roles="finance">
+                  <span class="dot ok"></span>
+                  <div>
+                    <strong>开票触发审批</strong>
+                    <small>1 张发票达到合同金额 80%</small>
+                  </div>
+                </button>
+                <button class="todo-item" data-page-jump="close" data-roles="pm">
+                  <span class="dot danger"></span>
+                  <div>
+                    <strong>结项材料待补充</strong>
+                    <small>1 个结项申请被驳回，需要补充验收报告</small>
+                  </div>
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <div class="content-grid">
+            <section class="panel" data-roles="admin,business,finance,pm">
+              <div class="panel-head">
+                <h2>月度开票/回款</h2>
+              </div>
+              <div class="bar-chart" aria-label="月度开票回款柱状图">
+                <div style="--invoice: 82%; --payment: 70%"><span>1月</span></div>
+                <div style="--invoice: 56%; --payment: 62%"><span>2月</span></div>
+                <div style="--invoice: 72%; --payment: 50%"><span>3月</span></div>
+                <div style="--invoice: 91%; --payment: 74%"><span>4月</span></div>
+                <div style="--invoice: 64%; --payment: 88%"><span>5月</span></div>
+                <div style="--invoice: 79%; --payment: 68%"><span>6月</span></div>
+              </div>
+              <div class="legend">
+                <span><i class="legend-invoice"></i>开票</span>
+                <span><i class="legend-payment"></i>回款</span>
+              </div>
+            </section>
+
+            <section class="panel" data-roles="admin,business,finance,pm">
+              <div class="panel-head">
+                <h2>快捷入口</h2>
+              </div>
+              <div class="quick-grid">
+                <button type="button" data-page-jump="project" data-roles="business">合同 OCR 登记</button>
+                <button type="button" data-page-jump="invoice" data-roles="finance">发票识别</button>
+                <button type="button" data-page-jump="close" data-roles="pm">提交结项</button>
+                <button type="button" data-page-jump="report" data-roles="admin,finance">导出报表</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" id="project">
+          <div class="content-grid project-grid">
+            <section class="panel panel-wide" data-roles="business">
+              <div class="panel-head">
+                <div>
+                  <h2>立项前登记</h2>
+                  <p>上传 Word 合同后自动提取项目信息，允许人工修正</p>
+                </div>
+                <span class="badge">PRJ-2026-0008</span>
+              </div>
+
+              <div class="upload-strip">
+                <div>
+                  <strong>Word 合同附件</strong>
+                  <span>.doc / .docx，文件大小不超过 20MB</span>
+                </div>
+                <button class="primary-btn" type="button" id="simulate-contract-ocr">模拟 OCR/NLP 识别</button>
+              </div>
+
+              <form class="form-grid" aria-label="立项登记表单">
+                <label>
+                  项目名称
+                  <input id="project-name" value="华东客户运营分析平台" />
+                </label>
+                <label>
+                  客户名称
+                  <input id="customer-name" value="上海云河科技有限公司" />
+                </label>
+                <label>
+                  合同金额
+                  <input id="contract-amount" value="500000" />
+                </label>
+                <label>
+                  合同编号
+                  <input id="contract-no" value="HT-2026-0019" />
+                </label>
+                <label>
+                  签订日期
+                  <input type="date" id="sign-date" value="2026-06-05" />
+                </label>
+                <label>
+                  项目类型
+                  <select>
+                    <option>软件开发</option>
+                    <option>系统集成</option>
+                    <option>咨询服务</option>
+                    <option>框架协议</option>
+                  </select>
+                </label>
+                <label>
+                  项目经理
+                  <select>
+                    <option>王敏</option>
+                    <option>陈立</option>
+                    <option>赵洁</option>
+                  </select>
+                </label>
+                <label>
+                  预计开始日期
+                  <input type="date" value="2026-06-12" />
+                </label>
+                <label>
+                  预计结束日期
+                  <input type="date" value="2026-10-31" />
+                </label>
+                <label class="full">
+                  项目描述
+                  <textarea>面向集团客户的运营数据采集、清洗、分析和可视化平台建设。</textarea>
+                </label>
+              </form>
+
+              <div class="form-actions">
+                <button class="ghost-btn" type="button">保存草稿</button>
+                <button class="primary-btn" type="button">提交立项审核</button>
+              </div>
+            </section>
+
+            <section class="panel" data-roles="business">
+              <div class="panel-head">
+                <h2>OCR 置信度</h2>
+                <span class="badge ok">可人工修正</span>
+              </div>
+              <div class="confidence-list">
+                <div>
+                  <span>项目名称</span>
+                  <strong>98%</strong>
+                  <meter value="98" max="100"></meter>
+                </div>
+                <div>
+                  <span>合同金额</span>
+                  <strong>85%</strong>
+                  <meter value="85" max="100"></meter>
+                </div>
+                <div>
+                  <span>合同编号</span>
+                  <strong>92%</strong>
+                  <meter value="92" max="100"></meter>
+                </div>
+                <div>
+                  <span>签订日期</span>
+                  <strong>68%</strong>
+                  <meter value="68" max="100"></meter>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel" data-roles="admin,business">
+            <div class="panel-head">
+              <div>
+                <h2>合同校验差异清单</h2>
+                <p>盖章 PDF 合同 OCR 后与登记值自动比对</p>
+              </div>
+              <button class="ghost-btn small" type="button" data-roles="business">上传 PDF 合同</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>字段</th>
+                    <th>登记值</th>
+                    <th>PDF 识别值</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>项目名称</td>
+                    <td>华东客户运营分析平台</td>
+                    <td>华东客户运营分析平台</td>
+                    <td><span class="status ok">一致</span></td>
+                    <td>-</td>
+                  </tr>
+                  <tr>
+                    <td>合同金额</td>
+                    <td>500,000</td>
+                    <td>500,000</td>
+                    <td><span class="status ok">一致</span></td>
+                    <td>-</td>
+                  </tr>
+                  <tr>
+                    <td>签订日期</td>
+                    <td>2026-06-05</td>
+                    <td>2026-06-06</td>
+                    <td><span class="status warn">待确认</span></td>
+                    <td><button class="link-btn" type="button" data-roles="business">采用登记值</button></td>
+                  </tr>
+                  <tr>
+                    <td>客户名称</td>
+                    <td>上海云河科技有限公司</td>
+                    <td>上海云河科技股份有限公司</td>
+                    <td><span class="status warn">待确认</span></td>
+                    <td><button class="link-btn" type="button" data-roles="business">人工确认</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel" data-roles="admin,business,pm">
+            <div class="panel-head">
+              <h2>项目列表</h2>
+              <div class="filter-row">
+                <input placeholder="项目名称 / 编号 / 客户" />
+                <select>
+                  <option>全部状态</option>
+                  <option>草稿</option>
+                  <option>待审核</option>
+                  <option>已立项</option>
+                  <option>进行中</option>
+                  <option>已结项</option>
+                </select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>项目编号</th>
+                    <th>项目名称</th>
+                    <th>客户</th>
+                    <th>金额</th>
+                    <th>状态</th>
+                    <th>项目经理</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>PRJ-2026-0008</td>
+                    <td>华东客户运营分析平台</td>
+                    <td>上海云河科技有限公司</td>
+                    <td>¥500,000</td>
+                    <td><span class="status warn">待审核</span></td>
+                    <td>王敏</td>
+                    <td>
+                      <button class="link-btn" type="button" data-roles="admin">审核</button>
+                      <button class="link-btn" type="button" data-roles="business,pm">查看</button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>PRJ-2026-0007</td>
+                    <td>合同智能识别升级</td>
+                    <td>杭州数智信息</td>
+                    <td>¥320,000</td>
+                    <td><span class="status ok">已立项</span></td>
+                    <td>陈立</td>
+                    <td><button class="link-btn" type="button">查看</button></td>
+                  </tr>
+                  <tr>
+                    <td>PRJ-2026-0006</td>
+                    <td>财务回款对账系统</td>
+                    <td>南京清源软件</td>
+                    <td>¥760,000</td>
+                    <td><span class="status info">进行中</span></td>
+                    <td>赵洁</td>
+                    <td><button class="link-btn" type="button">详情</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="page" id="invoice">
+          <div class="content-grid">
+            <section class="panel" data-roles="finance">
+              <div class="panel-head">
+                <div>
+                  <h2>开票登记</h2>
+                  <p>选择已立项项目，上传发票并识别关键字段</p>
+                </div>
+                <button class="primary-btn small" id="simulate-invoice-ocr" type="button">识别发票</button>
+              </div>
+              <form class="form-grid compact">
+                <label class="full">
+                  关联项目
+                  <select>
+                    <option>PRJ-2026-0007 合同智能识别升级</option>
+                    <option>PRJ-2026-0006 财务回款对账系统</option>
+                  </select>
+                </label>
+                <label>
+                  开票金额
+                  <input id="invoice-amount" value="120000" />
+                </label>
+                <label>
+                  开票日期
+                  <input type="date" id="invoice-date" value="2026-06-08" />
+                </label>
+                <label>
+                  发票号码
+                  <input id="invoice-no" value="044001900211" />
+                </label>
+                <label>
+                  发票类型
+                  <select>
+                    <option>增值税专票</option>
+                    <option>普通发票</option>
+                  </select>
+                </label>
+                <label>
+                  购方名称
+                  <input id="buyer-name" value="杭州数智信息有限公司" />
+                </label>
+                <label>
+                  销方名称
+                  <input id="seller-name" value="本公司" />
+                </label>
+              </form>
+              <div class="rule-box">
+                <strong>金额规则</strong>
+                <span>累计开票金额不能超过合同金额；达到 80% 时触发开票审批。</span>
+              </div>
+            </section>
+
+            <section class="panel" data-roles="finance">
+              <div class="panel-head">
+                <h2>回款登记</h2>
+                <span class="badge">多次回款</span>
+              </div>
+              <form class="form-grid compact">
+                <label class="full">
+                  关联开票
+                  <select>
+                    <option>044001900211 / ¥120,000</option>
+                    <option>044001900198 / ¥80,000</option>
+                  </select>
+                </label>
+                <label>
+                  回款日期
+                  <input type="date" value="2026-06-10" />
+                </label>
+                <label>
+                  回款金额
+                  <input value="80000" />
+                </label>
+                <label>
+                  回款方式
+                  <select>
+                    <option>银行转账</option>
+                    <option>支票</option>
+                    <option>现金</option>
+                  </select>
+                </label>
+                <label>
+                  回款凭证
+                  <input type="file" />
+                </label>
+              </form>
+              <div class="form-actions">
+                <button class="ghost-btn" type="button">暂存</button>
+                <button class="primary-btn" type="button">保存回款</button>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel" data-roles="admin,finance">
+            <div class="panel-head">
+              <div>
+                <h2>应收款计算</h2>
+                <p>应收款 = 已开票金额 - 累计回款金额</p>
+              </div>
+              <span class="badge danger">应收 ¥40,000</span>
+            </div>
+            <div class="receivable-grid">
+              <div>
+                <span>合同金额</span>
+                <strong>¥320,000</strong>
+              </div>
+              <div>
+                <span>累计开票</span>
+                <strong>¥200,000</strong>
+              </div>
+              <div>
+                <span>累计回款</span>
+                <strong>¥160,000</strong>
+              </div>
+              <div>
+                <span>剩余可开票</span>
+                <strong>¥120,000</strong>
+              </div>
+            </div>
+            <div class="progress-stack">
+              <div>
+                <span>开票进度 62.5%</span>
+                <i style="--w: 62.5%"></i>
+              </div>
+              <div>
+                <span>回款进度 80%</span>
+                <i style="--w: 80%"></i>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page" id="close">
+          <div class="content-grid">
+            <section class="panel" data-roles="pm">
+              <div class="panel-head">
+                <div>
+                  <h2>结项申请</h2>
+                  <p>项目经理提交结项，不强制要求开票回款完成</p>
+                </div>
+                <span class="badge info">尾款自动标记</span>
+              </div>
+              <form class="form-grid compact">
+                <label class="full">
+                  项目名称
+                  <select>
+                    <option>PRJ-2026-0006 财务回款对账系统</option>
+                    <option>PRJ-2026-0007 合同智能识别升级</option>
+                  </select>
+                </label>
+                <label>
+                  结项时间
+                  <input type="date" value="2026-06-30" />
+                </label>
+                <label>
+                  验收报告
+                  <input type="file" />
+                </label>
+                <label class="full">
+                  结项说明
+                  <textarea>项目已完成交付并通过客户验收，申请进入结项审批。</textarea>
+                </label>
+              </form>
+              <div class="form-actions">
+                <button class="ghost-btn" type="button">保存</button>
+                <button class="primary-btn" type="button">提交结项审批</button>
+              </div>
+            </section>
+
+            <section class="panel" data-roles="admin,finance,pm">
+              <div class="panel-head">
+                <h2>结项审批链路</h2>
+                <span class="badge">依次审批</span>
+              </div>
+              <ol class="approval-flow">
+                <li class="done">
+                  <strong>项目经理提交</strong>
+                  <span>2026-06-08 09:21</span>
+                </li>
+                <li class="current">
+                  <strong>财务审核</strong>
+                  <span>确认开票、回款、尾款状态</span>
+                </li>
+                <li>
+                  <strong>管理员审核</strong>
+                  <span>归档或驳回补充材料</span>
+                </li>
+                <li>
+                  <strong>已结项</strong>
+                  <span>项目只读，不可再开票</span>
+                </li>
+              </ol>
+            </section>
+          </div>
+
+          <section class="panel" data-roles="admin,finance">
+            <div class="panel-head">
+              <h2>结项审批列表</h2>
+              <div class="filter-row">
+                <button class="ghost-btn small" type="button">批量通过</button>
+                <button class="ghost-btn small" type="button">批量驳回</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th><input type="checkbox" /></th>
+                    <th>项目编号</th>
+                    <th>项目名称</th>
+                    <th>合同金额</th>
+                    <th>累计回款</th>
+                    <th>尾款状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><input type="checkbox" /></td>
+                    <td>PRJ-2026-0006</td>
+                    <td>财务回款对账系统</td>
+                    <td>¥760,000</td>
+                    <td>¥610,000</td>
+                    <td><span class="status warn">部分回款</span></td>
+                    <td><button class="link-btn" type="button">审批</button></td>
+                  </tr>
+                  <tr>
+                    <td><input type="checkbox" /></td>
+                    <td>PRJ-2026-0004</td>
+                    <td>供应商门户升级</td>
+                    <td>¥280,000</td>
+                    <td>¥280,000</td>
+                    <td><span class="status ok">已结清</span></td>
+                    <td><button class="link-btn" type="button">审批</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="page" id="report">
+          <section class="panel" data-roles="admin,business,finance,pm">
+            <div class="panel-head">
+              <div>
+                <h2>开票回款查询</h2>
+                <p>按年度、月度、项目、客户筛选并导出报表</p>
+              </div>
+              <div class="filter-row">
+                <input type="month" value="2026-06" />
+                <input placeholder="项目 / 客户" />
+                <button class="primary-btn small" type="button">查询</button>
+              </div>
+            </div>
+            <div class="report-summary">
+              <div>
+                <span>筛选项目</span>
+                <strong>18</strong>
+              </div>
+              <div>
+                <span>开票合计</span>
+                <strong>¥1,286.5 万</strong>
+              </div>
+              <div>
+                <span>回款合计</span>
+                <strong>¥1,011.2 万</strong>
+              </div>
+              <div>
+                <span>应收余额</span>
+                <strong>¥275.3 万</strong>
+              </div>
+            </div>
+          </section>
+
+          <div class="content-grid">
+            <section class="panel" data-roles="admin,finance">
+              <div class="panel-head">
+                <h2>趋势图</h2>
+              </div>
+              <div class="line-chart">
+                <svg viewBox="0 0 520 220" role="img" aria-label="开票回款趋势图">
+                  <polyline class="grid-line" points="30,40 500,40"></polyline>
+                  <polyline class="grid-line" points="30,95 500,95"></polyline>
+                  <polyline class="grid-line" points="30,150 500,150"></polyline>
+                  <polyline class="line invoice-line" points="30,150 120,110 210,124 300,72 390,98 500,60"></polyline>
+                  <polyline class="line payment-line" points="30,166 120,130 210,142 300,116 390,78 500,92"></polyline>
+                  <circle cx="500" cy="60" r="5" class="invoice-point"></circle>
+                  <circle cx="500" cy="92" r="5" class="payment-point"></circle>
+                </svg>
+              </div>
+              <div class="legend">
+                <span><i class="legend-invoice"></i>开票趋势</span>
+                <span><i class="legend-payment"></i>回款趋势</span>
+              </div>
+            </section>
+
+            <section class="panel" data-roles="admin,finance">
+              <div class="panel-head">
+                <h2>导出任务</h2>
+                <span class="badge ok">异步通知</span>
+              </div>
+              <div class="export-list">
+                <label><input type="checkbox" checked /> 项目明细</label>
+                <label><input type="checkbox" checked /> 开票记录</label>
+                <label><input type="checkbox" checked /> 回款记录</label>
+                <label><input type="checkbox" /> 综合 PDF 报表</label>
+              </div>
+              <div class="form-actions">
+                <button class="ghost-btn" type="button">保存模板</button>
+                <button class="primary-btn" type="button">开始导出</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" id="system">
+          <div class="content-grid">
+            <section class="panel" data-roles="admin">
+              <div class="panel-head">
+                <h2>用户管理</h2>
+                <button class="primary-btn small" type="button">新增用户</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>用户名</th>
+                      <th>姓名</th>
+                      <th>角色</th>
+                      <th>部门</th>
+                      <th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>admin</td>
+                      <td>系统管理员</td>
+                      <td>管理员</td>
+                      <td>运营中心</td>
+                      <td><span class="status ok">启用</span></td>
+                    </tr>
+                    <tr>
+                      <td>finance01</td>
+                      <td>李然</td>
+                      <td>财务</td>
+                      <td>财务部</td>
+                      <td><span class="status ok">启用</span></td>
+                    </tr>
+                    <tr>
+                      <td>biz03</td>
+                      <td>周晴</td>
+                      <td>商务</td>
+                      <td>市场部</td>
+                      <td><span class="status muted">禁用</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel" data-roles="admin">
+              <div class="panel-head">
+                <h2>审批流配置</h2>
+                <span class="badge">RBAC</span>
+              </div>
+              <div class="approval-template">
+                <div>
+                  <strong>立项审批</strong>
+                  <span>商务提交 → 管理员审核</span>
+                  <small>或签 / 48 小时超时</small>
+                </div>
+                <div>
+                  <strong>开票审批</strong>
+                  <span>财务提交 → 管理员审核</span>
+                  <small>开票金额 ≥ 合同金额 80%</small>
+                </div>
+                <div>
+                  <strong>结项审批</strong>
+                  <span>项目经理 → 财务 → 管理员</span>
+                  <small>依次审批 / 支持驳回补充</small>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel" data-roles="admin">
+            <div class="panel-head">
+              <h2>数据字典与审计日志</h2>
+              <button class="ghost-btn small" type="button">维护字典</button>
+            </div>
+            <div class="dict-grid">
+              <span>项目类型：软件开发、系统集成、咨询服务、框架协议</span>
+              <span>项目状态：草稿、待审核、已立项、进行中、已结项、已终止</span>
+              <span>合同类型：总包、分包、框架协议</span>
+              <span>回款方式：银行转账、支票、现金</span>
+            </div>
+            <div class="log-strip">
+              <span>2026-06-08 09:32 管理员审核通过 PRJ-2026-0007</span>
+              <span>2026-06-08 09:18 财务登记发票 044001900211</span>
+              <span>2026-06-08 08:55 商务上传合同 HT-2026-0019</span>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
