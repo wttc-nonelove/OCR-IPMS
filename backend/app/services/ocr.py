@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.models.entities import OcrRecognitionLog
 
 
-_DIGITS = {
+_CN_DIGITS = {
     "零": 0,
     "〇": 0,
     "一": 1,
@@ -36,7 +36,7 @@ _DIGITS = {
     "九": 9,
     "玖": 9,
 }
-_UNITS = {"十": 10, "拾": 10, "百": 100, "佰": 100, "千": 1000, "仟": 1000}
+_CN_UNITS = {"十": 10, "拾": 10, "百": 100, "佰": 100, "千": 1000, "仟": 1000}
 
 
 def _normalize_text(text: str) -> str:
@@ -49,10 +49,14 @@ def _clean_value(value: str | None, limit: int = 120) -> str:
         return ""
     value = unicodedata.normalize("NFKC", value)
     value = re.split(r"[\n\r;；]", value, 1)[0]
-    return value.strip(" \t:：,，。()（）[]【】\"'").strip()[:limit]
+    value = re.split(r"[（(]以下简称", value, 1)[0]
+    value = re.sub(r"\s+", " ", value)
+    return value.strip(" \t:：,，.。)）(（[]【】\"'").strip()[:limit]
 
 
-def _decimal_text(value: str) -> str:
+def _decimal_text(value: str | None) -> str:
+    if not value:
+        return ""
     try:
         return f"{Decimal(value.replace(',', '')).quantize(Decimal('0.01'))}"
     except (InvalidOperation, AttributeError):
@@ -63,16 +67,17 @@ def _parse_chinese_section(section: str) -> int:
     total = 0
     number = 0
     for char in section:
-        if char in _DIGITS:
-            number = _DIGITS[char]
-        elif char in _UNITS:
-            total += (number or 1) * _UNITS[char]
+        if char in _CN_DIGITS:
+            number = _CN_DIGITS[char]
+        elif char in _CN_UNITS:
+            total += (number or 1) * _CN_UNITS[char]
             number = 0
     return total + number
 
 
 def _parse_chinese_integer(value: str) -> int:
     value = re.sub(r"[人民币圆元整正\s]", "", value)
+    value = re.split(r"[角分]", value, 1)[0]
     total = 0
     if "亿" in value:
         before, value = value.split("亿", 1)
@@ -87,16 +92,14 @@ def _parse_chinese_integer(value: str) -> int:
 def _extract_chinese_amount(text: str) -> str:
     amount_chars = "零〇一壹二贰两三叁四肆五伍六陆七柒八捌九玖十拾百佰千仟万亿圆元角分整正"
     patterns = [
-        rf"(?:合同金额|合同总金额|总金额|价款|金额|人民币)[:：\s]*人民币?\s*([{amount_chars}]{{2,}})",
+        rf"(?:合同金额|合同总金额|总金额|价款|金额|人民币)[:：\s]*(?:人民币)?\s*([{amount_chars}]{{2,}})",
         rf"人民币\s*([{amount_chars}]{{2,}})",
     ]
     for pattern in patterns:
         match = re.search(pattern, text)
         if not match:
             continue
-        raw = match.group(1)
-        integer_part = re.split(r"[角分]", raw, 1)[0]
-        amount = _parse_chinese_integer(integer_part)
+        amount = _parse_chinese_integer(match.group(1))
         if amount:
             return f"{Decimal(amount).quantize(Decimal('0.01'))}"
     return ""
@@ -107,9 +110,9 @@ def _extract_amount(text: str, labels: list[str] | None = None) -> str:
     labels = labels or ["合同金额", "合同总金额", "总金额", "价款", "金额", "人民币"]
     label_expr = "|".join(re.escape(label) for label in labels)
     labeled_patterns = [
-        rf"(?:{label_expr})[:：\s]*(?:人民币)?\s*[^\n\r\d¥￥]{{0,30}}[（(]?\s*[¥￥]\s*([0-9][0-9,]*(?:\.\d{{1,2}})?)",
+        rf"(?:{label_expr})[:：\s]*(?:人民币)?[^\n\r\d¥￥]{{0,40}}[（(]?\s*[¥￥]\s*([0-9][0-9,]*(?:\.\d{{1,2}})?)",
         rf"(?:{label_expr})[:：\s]*(?:人民币)?\s*([0-9][0-9,]*(?:\.\d{{1,2}})?)",
-        rf"(?:{label_expr})[:：\s]*(?:人民币)?[^\n\r\d]{{0,60}}([0-9][0-9,]*(?:\.\d{{1,2}})?)",
+        rf"(?:{label_expr})[:：\s]*(?:人民币)?[^\n\r\d]{{0,80}}([0-9][0-9,]*(?:\.\d{{1,2}})?)",
     ]
     for pattern in labeled_patterns:
         match = re.search(pattern, text, re.I)
@@ -142,7 +145,7 @@ def _extract_amount(text: str, labels: list[str] | None = None) -> str:
 
 def _extract_date(text: str) -> str:
     text = _normalize_text(text)
-    match = re.search(r"(20\d{2})[年\-/.](\d{1,2})[月\-/.](\d{1,2})日?", text)
+    match = re.search(r"(20\d{2})[年\-/\.](\d{1,2})[月\-/\.](\d{1,2})日?", text)
     if not match:
         return ""
     return f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
@@ -153,11 +156,11 @@ def _match_after(text: str, labels: list[str], limit: int = 120) -> str:
     for line in re.split(r"[\n\r]+", text):
         normalized = line.strip()
         for label in labels:
-            match = re.search(rf"{re.escape(label)}\s*[:：]?\s*(.+)$", normalized)
+            match = re.search(rf"{re.escape(label)}(?:[（(][^）)]*[）)])?\s*[:：]?\s*(.+)$", normalized)
             if match:
                 return _clean_value(match.group(1), limit)
     for label in labels:
-        match = re.search(rf"{re.escape(label)}\s*[:：]\s*([^\n\r；;]{{1,{limit}}})", text)
+        match = re.search(rf"{re.escape(label)}(?:[（(][^）)]*[）)])?\s*[:：]?\s*([^\n\r;；]{{1,{limit}}})", text)
         if match:
             return _clean_value(match.group(1), limit)
     return ""
@@ -167,7 +170,8 @@ def _extract_contract_no(text: str) -> str:
     text = _normalize_text(text)
     labeled = _match_after(text, ["合同编号", "合同号", "编号"], 80)
     if labeled:
-        return labeled
+        match = re.search(r"[A-Za-z0-9][A-Za-z0-9\-_]{3,}", labeled)
+        return match.group(0) if match else labeled
     match = re.search(r"\b(HT[-_A-Za-z0-9]{4,}|PRJ[-_A-Za-z0-9]{4,})\b", text, re.I)
     return match.group(1) if match else ""
 
@@ -253,30 +257,31 @@ def _call_paddleocr(path: Path, recognition_type: str) -> tuple[str, float, list
     response.raise_for_status()
     payload = response.json()
     data = payload.get("data", payload)
+    if payload.get("code") not in {None, 200, "200"}:
+        raise RuntimeError(data.get("error") or payload.get("message") or "PaddleOCR 识别失败")
+
     raw_lines = data.get("lines") or []
     raw_text_field = data.get("raw_text") or data.get("text") or ""
     texts: list[str] = []
     confidences: list[float] = []
     for line in raw_lines:
         if isinstance(line, dict):
-            texts.append(str(line.get("text") or ""))
+            if not raw_text_field:
+                texts.append(str(line.get("text") or ""))
             if line.get("confidence") is not None:
                 confidences.append(float(line["confidence"]))
         elif isinstance(line, (list, tuple)) and line:
-            texts.append(str(line[0]))
+            if not raw_text_field:
+                texts.append(str(line[0]))
             if len(line) >= 3:
                 try:
                     confidences.append(float(line[2]))
                 except (TypeError, ValueError):
                     pass
-        else:
+        elif not raw_text_field:
             texts.append(str(line))
-    if isinstance(raw_text_field, str) and raw_text_field:
-        texts.append(raw_text_field)
-    raw_text = "\n".join(t for t in texts if t)
+    raw_text = raw_text_field if isinstance(raw_text_field, str) and raw_text_field else "\n".join(t for t in texts if t)
     confidence = sum(confidences) / len(confidences) if confidences else float(data.get("confidence") or 0)
-    if not raw_text and payload.get("code") not in {None, 200, "200"}:
-        raise RuntimeError(data.get("error") or payload.get("message") or "PaddleOCR 识别失败")
     return raw_text, confidence, raw_lines
 
 

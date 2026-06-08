@@ -7,7 +7,7 @@
             <h2>立项草稿</h2>
             <p>Word 上传后自动解析并保存到后端草稿；刷新页面后自动恢复</p>
           </div>
-          <span class="badge">{{ form.project_no || nextNo || '编号加载中' }}</span>
+          <span class="badge">项目编号：{{ form.project_no || nextNo || '编号加载中' }}</span>
         </div>
 
         <div class="upload-strip">
@@ -75,12 +75,12 @@
           <span class="badge info">PDF/图片 OCR</span>
         </div>
         <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 100%; margin-bottom: 12px" @change="loadDiffs">
-          <el-option v-for="project in projects" :key="project.id" :label="`${project.project_no} ${project.name}`" :value="project.id" />
+          <el-option v-for="project in projects" :key="project.id" :label="projectOptionLabel(project)" :value="project.id" />
         </el-select>
         <el-upload :auto-upload="false" :on-change="onPdfFile" :limit="1" :show-file-list="false">
           <el-button :loading="parsingPdf">选择并解析 PDF/图片合同</el-button>
         </el-upload>
-        <el-alert v-if="pdfMessage" :title="pdfMessage" type="info" :closable="false" style="margin-top: 12px" />
+        <el-alert v-if="pdfMessage" :title="pdfMessage" :type="pdfAlertType" :closable="false" style="margin-top: 12px" />
         <el-alert
           v-if="pdfUnrecognized.length"
           :title="`以下字段未识别到：${pdfUnrecognized.map((item: any) => item.field_label).join('、')}`"
@@ -88,6 +88,12 @@
           :closable="false"
           style="margin-top: 12px"
         />
+        <div v-if="pdfRawPreview" class="rule-box" style="margin-top: 12px">
+          <div>
+            <strong>OCR 原文摘要</strong>
+            <span>{{ pdfRawPreview }}</span>
+          </div>
+        </div>
       </section>
     </div>
 
@@ -148,6 +154,7 @@
 
       <el-table :data="projects" empty-text="暂无项目">
         <el-table-column prop="project_no" label="项目编号" min-width="140" />
+        <el-table-column prop="contract_no" label="合同编号" min-width="140" />
         <el-table-column prop="name" label="项目名称" min-width="180" />
         <el-table-column prop="party_a" label="甲方/客户" min-width="160" />
         <el-table-column prop="party_b" label="乙方" min-width="160" />
@@ -159,7 +166,7 @@
             <span class="status" :class="statusClass(row.status)">{{ statusText(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right">
+        <el-table-column label="操作" width="360" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="editDraft(row)">编辑草稿</el-button>
             <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="submit(row.id)">提交审核</el-button>
@@ -167,6 +174,7 @@
             <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link type="danger" @click="approve(row.id, 'rejected')">驳回</el-button>
             <el-button v-if="row.status === 'approved' && auth.user?.role === 'admin'" link @click="start(row.id)">确认开始</el-button>
             <el-button link @click="selectProject(row.id)">查看差异</el-button>
+            <el-button v-if="canDelete(row)" link type="danger" @click="deleteProject(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -195,6 +203,8 @@ const saveStatus = ref('')
 const parseMessage = ref('')
 const pdfMessage = ref('')
 const pdfUnrecognized = ref<any[]>([])
+const pdfParseStatus = ref('')
+const pdfRawPreview = ref('')
 const suppressAutoSave = ref(false)
 const form = reactive<any>({
   id: null,
@@ -209,6 +219,11 @@ const form = reactive<any>({
 })
 
 const parseAlertType = computed(() => (parseMessage.value.includes('失败') || parseMessage.value.includes('补充') ? 'warning' : 'success'))
+const pdfAlertType = computed(() => {
+  if (pdfParseStatus.value === 'ocr_failed') return 'error'
+  if (pdfParseStatus.value === 'field_extract_failed' || pdfUnrecognized.value.length) return 'warning'
+  return 'info'
+})
 
 async function onWordFile(upload: UploadFile) {
   if (!upload.raw) return
@@ -245,7 +260,9 @@ async function onPdfFile(upload: UploadFile) {
     const res: any = await http.post('/project/stamped-contract/parse', data)
     diffs.value = res.data.diffs || []
     pdfUnrecognized.value = res.data.unrecognized_fields || []
-    pdfMessage.value = diffs.value.length ? `识别完成，生成 ${diffs.value.length} 条差异` : '识别完成，未发现差异'
+    pdfParseStatus.value = res.data.parse_status || ''
+    pdfRawPreview.value = res.data.raw_text_preview || ''
+    pdfMessage.value = res.message || (diffs.value.length ? `识别完成，生成 ${diffs.value.length} 条差异` : '识别完成，未发现差异')
     await load()
   } finally {
     parsingPdf.value = false
@@ -307,6 +324,8 @@ async function newDraft() {
   selectedProjectId.value = null
   diffs.value = []
   pdfUnrecognized.value = []
+  pdfParseStatus.value = ''
+  pdfRawPreview.value = ''
   parseMessage.value = ''
   saveStatus.value = ''
   suppressAutoSave.value = false
@@ -329,6 +348,8 @@ async function loadDiffs() {
   const res: any = await http.get('/project/diff/list', { params: { project_id: selectedProjectId.value } })
   diffs.value = res.data
   pdfUnrecognized.value = []
+  pdfRawPreview.value = ''
+  pdfParseStatus.value = ''
 }
 
 async function confirmDiff(row: any) {
@@ -375,6 +396,27 @@ async function start(id: number) {
   await load()
 }
 
+async function deleteProject(row: any) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除项目 ${row.project_no} / ${row.name}？删除后将清理该项目的合同、差异、发票、回款、结项和审批数据。`,
+      '删除项目',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  await http.delete(`/project/${row.id}`)
+  ElMessage.success('项目已删除')
+  if (selectedProjectId.value === row.id) {
+    selectedProjectId.value = null
+    diffs.value = []
+    pdfUnrecognized.value = []
+    pdfRawPreview.value = ''
+  }
+  await Promise.all([load(), loadNextNo()])
+}
+
 function appendIfPresent(data: FormData, key: string, value: any) {
   if (value !== undefined && value !== null && value !== '') data.append(key, String(value))
 }
@@ -397,6 +439,16 @@ function applyProject(project: any) {
 
 function hasDraftContent() {
   return Boolean(form.id || form.name || form.party_a || form.party_b || form.amount || form.contract_no)
+}
+
+function projectOptionLabel(project: any) {
+  return `${project.project_no} / ${project.contract_no || '无合同编号'} / ${project.name}`
+}
+
+function canDelete(row: any) {
+  if (row.status === 'closed') return false
+  if (auth.user?.role === 'admin') return true
+  return auth.user?.role === 'business' && row.status === 'draft'
 }
 
 function money(value: number) {

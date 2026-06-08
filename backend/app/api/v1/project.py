@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
@@ -11,7 +11,7 @@ import hashlib
 import re
 from pathlib import Path
 
-from app.models.entities import ApprovalInstance, ApprovalTask, Contract, ContractDiff, DictItem, Invoice, Payment, Project, ProjectClose, User
+from app.models.entities import ApprovalInstance, ApprovalRecord, ApprovalTask, Contract, ContractDiff, DictItem, Invoice, Payment, Project, ProjectClose, ProjectCost, User
 from app.models.enums import ADMIN, APPROVAL_PENDING, APPROVAL_APPROVED, APPROVAL_REJECTED, BUSINESS, PM, PROJECT_ACTIVE, PROJECT_APPROVED, PROJECT_CLOSED, PROJECT_DRAFT, PROJECT_PENDING
 from app.schemas.business import ContractDiffConfirmIn, ProjectApproveIn, ProjectOut, ProjectStartIn
 from app.schemas.common import ok
@@ -230,8 +230,31 @@ async def parse_stamped_contract(
     diffs, unrecognized_fields = _create_contract_diffs(db, project, contract.id, extracted)
     log_action(db, user, "project_stamped_contract_parse", f"{project.project_no} {pdf_contract.filename}")
     db.commit()
-    message = "识别完成，未发现差异" if not diffs else f"识别完成，生成 {len(diffs)} 条差异"
-    return ok({"diffs": [_diff_out(d) for d in diffs], "unrecognized_fields": unrecognized_fields, "extracted": extracted, "ocr": result}, message)
+    line_count = len((result.get("raw_text") or "").splitlines()) if result.get("raw_text") else 0
+    if result.get("status") == "failed":
+        parse_status = "ocr_failed"
+        message = f"OCR识别失败：{result.get('error_message') or '请检查文件质量或格式'}"
+    elif not any(extracted.values()):
+        parse_status = "field_extract_failed"
+        message = "OCR已识别文本，但未提取到合同关键字段，请查看原文摘要或手动补充"
+    elif diffs:
+        parse_status = "diff_found"
+        message = f"识别完成，生成 {len(diffs)} 条差异"
+    else:
+        parse_status = "no_diff"
+        message = "识别完成，未发现差异"
+    return ok(
+        {
+            "parse_status": parse_status,
+            "diffs": [_diff_out(d) for d in diffs],
+            "unrecognized_fields": unrecognized_fields,
+            "extracted": extracted,
+            "ocr": result,
+            "raw_text_preview": (result.get("raw_text") or "")[:500],
+            "recognized_line_count": line_count,
+        },
+        message,
+    )
 
 
 @router.get("/options")
@@ -249,7 +272,7 @@ def project_options(
         query = query.filter(Project.status == PROJECT_ACTIVE)
     projects = query.order_by(Project.create_time.desc()).all()
     return ok([
-        {"id": p.id, "project_no": p.project_no, "name": p.name, "customer": p.customer, "amount": float(p.amount), "status": p.status}
+        {"id": p.id, "project_no": p.project_no, "contract_no": p.contract_no, "name": p.name, "customer": p.customer, "amount": float(p.amount), "status": p.status}
         for p in projects
     ])
 
@@ -306,6 +329,42 @@ def list_projects(
         query = query.filter(Project.status == status)
     projects = query.order_by(Project.create_time.desc()).all()
     return ok([ProjectOut.model_validate(project).model_dump() for project in projects])
+
+
+@router.delete("/{project_id}")
+def delete_project(project_id: int, db: Session = Depends(get_db), user: User = Depends(require_roles(BUSINESS, ADMIN))):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if project.status == PROJECT_CLOSED:
+        raise HTTPException(status_code=400, detail="已结项项目不可删除")
+    if user.role == BUSINESS and not (project.status == PROJECT_DRAFT and project.create_by == user.id):
+        raise HTTPException(status_code=403, detail="商务只能删除自己创建的草稿项目")
+
+    summary = f"{project.project_no} {project.name}"
+    close_ids = [row[0] for row in db.query(ProjectClose.id).filter(ProjectClose.project_id == project.id).all()]
+    conditions = [
+        (ApprovalInstance.business_type == "project") & (ApprovalInstance.business_id == project.id),
+        (ApprovalInstance.business_type == "invoice") & (ApprovalInstance.business_id == project.id),
+    ]
+    if close_ids:
+        conditions.append((ApprovalInstance.business_type == "close") & (ApprovalInstance.business_id.in_(close_ids)))
+    instances = db.query(ApprovalInstance).filter(or_(*conditions)).all()
+    instance_ids = [item.id for item in instances]
+    if instance_ids:
+        db.query(ApprovalRecord).filter(ApprovalRecord.instance_id.in_(instance_ids)).delete(synchronize_session=False)
+        db.query(ApprovalTask).filter(ApprovalTask.instance_id.in_(instance_ids)).delete(synchronize_session=False)
+        db.query(ApprovalInstance).filter(ApprovalInstance.id.in_(instance_ids)).delete(synchronize_session=False)
+    db.query(Payment).filter(Payment.project_id == project.id).delete(synchronize_session=False)
+    db.query(Invoice).filter(Invoice.project_id == project.id).delete(synchronize_session=False)
+    db.query(ProjectClose).filter(ProjectClose.project_id == project.id).delete(synchronize_session=False)
+    db.query(ProjectCost).filter(ProjectCost.project_id == project.id).delete(synchronize_session=False)
+    db.query(ContractDiff).filter(ContractDiff.project_id == project.id).delete(synchronize_session=False)
+    db.query(Contract).filter(Contract.project_id == project.id).delete(synchronize_session=False)
+    db.query(Project).filter(Project.id == project.id).delete(synchronize_session=False)
+    log_action(db, user, "project_delete", summary)
+    db.commit()
+    return ok(message="项目已删除")
 
 
 @router.post("/create")
