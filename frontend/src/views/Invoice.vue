@@ -1,7 +1,8 @@
 <template>
   <section class="page-grid">
-    <div class="content-grid">
-      <section class="panel">
+    <section class="panel">
+      <el-tabs v-model="activeRegistrationTab" class="finance-tabs">
+        <el-tab-pane label="开票登记" name="invoice">
         <div class="panel-head">
           <div>
             <h2>开票登记</h2>
@@ -76,9 +77,9 @@
         <div class="form-actions">
           <el-button type="primary" :loading="invoiceSaving" @click="createInvoice">保存开票</el-button>
         </div>
-      </section>
+        </el-tab-pane>
 
-      <section class="panel">
+        <el-tab-pane label="回款登记" name="payment">
         <div class="panel-head">
           <h2>回款登记</h2>
           <span class="badge">绑定单张发票</span>
@@ -135,8 +136,9 @@
         <div class="form-actions">
           <el-button type="primary" :loading="paymentSaving" @click="createPayment">保存回款</el-button>
         </div>
-      </section>
-    </div>
+        </el-tab-pane>
+      </el-tabs>
+    </section>
 
     <section class="panel">
       <div class="panel-head">
@@ -185,46 +187,52 @@
       <div class="panel-head">
         <h2>发票与回款记录</h2>
       </div>
-      <el-table :data="invoices" empty-text="暂无发票记录">
-        <el-table-column prop="invoice_no" label="发票号码" min-width="140" />
-        <el-table-column label="不含税金额" width="130">
-          <template #default="{ row }">{{ money(row.amount_without_tax) }}</template>
-        </el-table-column>
-        <el-table-column label="税率" width="90">
-          <template #default="{ row }">{{ row.tax_rate ? `${row.tax_rate}%` : '-' }}</template>
-        </el-table-column>
-        <el-table-column label="税额" width="120">
-          <template #default="{ row }">{{ money(row.tax_amount) }}</template>
-        </el-table-column>
-        <el-table-column label="价税合计" width="130">
-          <template #default="{ row }">{{ money(row.amount) }}</template>
-        </el-table-column>
-        <el-table-column prop="invoice_date" label="开票日期" width="120" />
-        <el-table-column prop="buyer" label="购方" min-width="150" />
-        <el-table-column prop="seller" label="销方" min-width="150" />
-        <el-table-column v-if="auth.user?.role === 'finance'" label="操作" width="90" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="danger" @click="deleteInvoice(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-table :data="payments" empty-text="暂无回款记录" style="margin-top: 16px">
-        <el-table-column prop="invoice_no" label="关联发票" min-width="140" />
-        <el-table-column label="回款金额" width="130">
-          <template #default="{ row }">{{ money(row.amount) }}</template>
-        </el-table-column>
-        <el-table-column prop="payment_date" label="回款日期" width="120" />
-        <el-table-column prop="payment_method" label="方式" width="100" />
-        <el-table-column label="凭证" width="100">
-          <template #default="{ row }">{{ row.voucher_file ? '已上传' : '未上传' }}</template>
-        </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="180" />
-        <el-table-column v-if="auth.user?.role === 'finance'" label="操作" width="90" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="danger" @click="deletePayment(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <el-tabs v-model="activeRecordTab" class="finance-tabs">
+        <el-tab-pane :label="`发票记录（${invoices.length}）`" name="invoice">
+          <el-table :data="invoices" empty-text="暂无发票记录">
+            <el-table-column prop="invoice_no" label="发票号码" min-width="140" />
+            <el-table-column label="不含税金额" width="130">
+              <template #default="{ row }">{{ money(row.amount_without_tax) }}</template>
+            </el-table-column>
+            <el-table-column label="税率" width="90">
+              <template #default="{ row }">{{ row.tax_rate ? `${row.tax_rate}%` : '-' }}</template>
+            </el-table-column>
+            <el-table-column label="税额" width="120">
+              <template #default="{ row }">{{ money(row.tax_amount) }}</template>
+            </el-table-column>
+            <el-table-column label="价税合计" width="130">
+              <template #default="{ row }">{{ money(row.amount) }}</template>
+            </el-table-column>
+            <el-table-column prop="invoice_date" label="开票日期" width="120" />
+            <el-table-column prop="buyer" label="购方" min-width="150" />
+            <el-table-column prop="seller" label="销方" min-width="150" />
+            <el-table-column v-if="auth.user?.role === 'finance'" label="操作" width="90" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="danger" @click="deleteInvoice(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+        <el-tab-pane :label="`回款记录（${payments.length}）`" name="payment">
+          <el-table :data="payments" empty-text="暂无回款记录">
+            <el-table-column prop="invoice_no" label="关联发票" min-width="140" />
+            <el-table-column label="回款金额" width="130">
+              <template #default="{ row }">{{ money(row.amount) }}</template>
+            </el-table-column>
+            <el-table-column prop="payment_date" label="回款日期" width="120" />
+            <el-table-column prop="payment_method" label="方式" width="100" />
+            <el-table-column label="凭证" width="100">
+              <template #default="{ row }">{{ row.voucher_file ? '已上传' : '未上传' }}</template>
+            </el-table-column>
+            <el-table-column prop="remark" label="备注" min-width="180" />
+            <el-table-column v-if="auth.user?.role === 'finance'" label="操作" width="90" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="danger" @click="deletePayment(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
     </section>
 
     <el-dialog v-model="detailVisible" title="立项申请详情" width="860px">
@@ -271,6 +279,8 @@ import { http } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
+const activeRegistrationTab = ref('invoice')
+const activeRecordTab = ref('invoice')
 const invoiceProjectOptions = ref<any[]>([])
 const paymentProjectOptions = ref<any[]>([])
 const invoices = ref<any[]>([])
@@ -482,6 +492,7 @@ async function createInvoice() {
       ;(payment as any).project_id = projectId
     }
     await refreshFinance(projectId)
+    activeRecordTab.value = 'invoice'
   } finally {
     invoiceSaving.value = false
   }
@@ -502,6 +513,7 @@ async function createPayment() {
     rememberProject(projectId)
     await loadOptions()
     await refreshFinance(projectId)
+    activeRecordTab.value = 'payment'
   } finally {
     paymentSaving.value = false
   }

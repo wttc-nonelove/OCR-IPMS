@@ -42,7 +42,11 @@
         </div>
       </el-header>
       <el-main>
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <transition name="fade-page" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </router-view>
       </el-main>
     </el-container>
   </el-container>

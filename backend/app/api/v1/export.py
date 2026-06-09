@@ -17,11 +17,15 @@ class ExportBatchIn(BaseModel):
     project_ids: list[int] | None = None
     export_types: list[str] = ["project"]
     format: str = "excel"
+    mode: str = "year"
+    year: int | None = None
+    month: str | None = None
+    keyword: str | None = None
 
 
 @router.post("/batch")
 def export_batch(payload: ExportBatchIn, db: Session = Depends(get_db), user: User = Depends(require_roles(ADMIN, FINANCE))):
-    return ok(enqueue_export(payload.project_ids, payload.export_types, payload.format, SessionLocal))
+    return ok(enqueue_export(payload.project_ids, payload.export_types, payload.format, SessionLocal, payload.year, payload.keyword, payload.mode, payload.month))
 
 
 @router.get("/status")
