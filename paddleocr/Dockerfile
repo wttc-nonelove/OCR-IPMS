@@ -1,6 +1,10 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV FLAGS_use_mkldnn=false \
+    FLAGS_enable_mkldnn=false \
+    FLAGS_allocator_strategy=auto_growth \
+    OMP_NUM_THREADS=1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*

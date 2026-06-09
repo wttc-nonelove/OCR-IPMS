@@ -26,10 +26,12 @@ def list_payments(project_id: int | None = None, db: Session = Depends(get_db), 
             "id": p.id,
             "project_id": p.project_id,
             "invoice_id": p.invoice_id,
+            "invoice_no": p.invoice.invoice_no if p.invoice else None,
             "amount": float(p.amount),
             "payment_date": p.payment_date.isoformat(),
             "payment_method": p.payment_method,
             "remark": p.remark,
+            "voucher_file": p.voucher_file,
             "create_time": p.create_time.isoformat() if p.create_time else None,
         }
         for p in query.order_by(Payment.create_time.desc()).all()

@@ -25,3 +25,11 @@ async def invoice_ocr(file: UploadFile = File(...), db: Session = Depends(get_db
     data = recognize_file(db, path, "invoice")
     db.commit()
     return ok(data)
+
+
+@router.post("/payment")
+async def payment_ocr(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    path = await save_upload(file, "ocr")
+    data = recognize_file(db, path, "payment")
+    db.commit()
+    return ok(data)

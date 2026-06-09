@@ -25,6 +25,36 @@ def list_tasks(db: Session = Depends(get_db), user: User = Depends(get_current_u
     return ok([_task_out(db, t) for t in items])
 
 
+@router.get("/flow/current")
+def current_flow(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    task = (
+        db.query(ApprovalTask)
+        .filter(ApprovalTask.approver_id == user.id, ApprovalTask.status == APPROVAL_PENDING)
+        .order_by(ApprovalTask.create_time.asc())
+        .first()
+    )
+    if not task:
+        return ok({"has_todo": False, "steps": [], "title": "暂无待办", "business_type": None})
+    data = _task_out(db, task)
+    return ok(
+        {
+            "has_todo": True,
+            "title": data.get("title") or "审批待办",
+            "business_type": data.get("business_type"),
+            "business_id": data.get("business_id"),
+            "project_no": data.get("project_no"),
+            "current_node": data.get("node_name"),
+            "next_step": _next_step_label(data.get("business_type")),
+            "status": data.get("status"),
+            "steps": [
+                {"label": data.get("start_by") or "业务提交", "status": "done"},
+                {"label": data.get("node_name") or "当前审批", "status": "current"},
+                {"label": _next_step_label(data.get("business_type")), "status": "pending"},
+            ],
+        }
+    )
+
+
 @router.get("/template/list")
 def list_templates(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     templates = db.query(ApprovalTemplate).order_by(ApprovalTemplate.id).all()
@@ -90,3 +120,13 @@ def _task_out(db: Session, task: ApprovalTask) -> dict:
         "start_by": starter.name if starter else "",
         **summary,
     }
+
+
+def _next_step_label(business_type: str | None) -> str:
+    if business_type == "project":
+        return "已立项"
+    if business_type == "close":
+        return "已结项"
+    if business_type == "invoice":
+        return "开票完成"
+    return "流程完成"

@@ -20,11 +20,21 @@
             结项时间
             <el-date-picker v-model="form.close_time" value-format="YYYY-MM-DD" placeholder="结项时间" style="width: 100%" />
           </label>
-          <label>
+          <label class="full">
             验收报告
-            <el-upload :auto-upload="false" :on-change="onReportFile" :limit="1">
-              <el-button>选择附件</el-button>
+            <el-upload :auto-upload="false" :on-change="onReportFile" :limit="1" :show-file-list="false">
+              <el-button>选择验收报告</el-button>
             </el-upload>
+            <span v-if="reportFileName" class="muted">已选择：{{ reportFileName }}</span>
+            <el-button v-if="reportFileName" link type="danger" @click="clearReportFile">清除</el-button>
+          </label>
+          <label class="full">
+            其他附件
+            <el-upload :auto-upload="false" :on-change="onAttachmentFile" :limit="1" :show-file-list="false">
+              <el-button>选择其他附件</el-button>
+            </el-upload>
+            <span v-if="attachmentFileName" class="muted">已选择：{{ attachmentFileName }}</span>
+            <el-button v-if="attachmentFileName" link type="danger" @click="clearAttachmentFile">清除</el-button>
           </label>
           <label class="full">
             结项说明
@@ -119,10 +129,29 @@ const items = ref<any[]>([])
 const tasks = ref<any[]>([])
 const projectOptions = ref<any[]>([])
 const reportFile = ref<any>(null)
+const attachmentFile = ref<any>(null)
+const reportFileName = ref('')
+const attachmentFileName = ref('')
 const form = reactive({ project_id: '', close_time: '', description: '' })
 
 function onReportFile(upload: any) {
   reportFile.value = upload.raw
+  reportFileName.value = upload.name || upload.raw?.name || ''
+}
+
+function onAttachmentFile(upload: any) {
+  attachmentFile.value = upload.raw
+  attachmentFileName.value = upload.name || upload.raw?.name || ''
+}
+
+function clearReportFile() {
+  reportFile.value = null
+  reportFileName.value = ''
+}
+
+function clearAttachmentFile() {
+  attachmentFile.value = null
+  attachmentFileName.value = ''
 }
 
 async function loadProjects() {
@@ -140,10 +169,12 @@ async function apply() {
   const data = new FormData()
   Object.entries(form).forEach(([k, v]) => data.append(k, String(v)))
   if (reportFile.value) data.append('report_file', reportFile.value)
+  if (attachmentFile.value) data.append('attachment', attachmentFile.value)
   await http.post('/close/apply', data)
   ElMessage.success('已提交')
   Object.assign(form, { project_id: '', close_time: '', description: '' })
-  reportFile.value = null
+  clearReportFile()
+  clearAttachmentFile()
   await Promise.all([load(), loadProjects()])
 }
 

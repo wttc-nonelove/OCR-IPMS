@@ -9,6 +9,8 @@ class ProjectOut(BaseModel):
     project_no: str
     name: str
     customer: str
+    party_a: str | None = None
+    party_b: str | None = None
     amount: Decimal
     status: str
     balance_status: str

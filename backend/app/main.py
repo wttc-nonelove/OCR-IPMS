@@ -7,6 +7,7 @@ from app.db.session import Base, SessionLocal, engine
 from app.models import entities  # noqa: F401
 from app.schemas.common import ok
 from app.services.bootstrap import seed_initial_data
+from app.services.schema_compat import ensure_compatible_schema
 
 settings = get_settings()
 
@@ -24,6 +25,7 @@ app.include_router(api_router, prefix=settings.api_prefix)
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
+    ensure_compatible_schema(engine)
     db = SessionLocal()
     try:
         seed_initial_data(db)

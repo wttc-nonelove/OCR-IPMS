@@ -74,6 +74,8 @@ class Project(Base, TimestampMixin):
     project_no: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     customer: Mapped[str] = mapped_column(String(200), index=True)
+    party_a: Mapped[str | None] = mapped_column(String(200), index=True)
+    party_b: Mapped[str | None] = mapped_column(String(200))
     amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=0)
     contract_no: Mapped[str | None] = mapped_column(String(50))
     sign_date: Mapped[date | None] = mapped_column(Date)

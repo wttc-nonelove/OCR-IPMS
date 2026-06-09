@@ -7,7 +7,7 @@
             <h2>开票登记</h2>
             <p>选择真实项目，上传发票 PDF/图片后调用 OCR 回填字段</p>
           </div>
-          <el-button :disabled="!invoiceFile" type="primary" @click="recognizeInvoice">识别发票</el-button>
+          <span class="badge info">{{ invoiceRecognizing ? '识别中' : '自动识别' }}</span>
         </div>
 
         <div class="form-grid compact">
@@ -46,8 +46,8 @@
           </label>
           <label>
             发票文件
-            <el-upload :auto-upload="false" :on-change="onInvoiceFile" :limit="1">
-              <el-button>选择 PDF/图片</el-button>
+            <el-upload :auto-upload="false" :on-change="onInvoiceFile" :limit="1" :show-file-list="false">
+              <el-button :loading="invoiceRecognizing">选择并识别发票</el-button>
             </el-upload>
           </label>
         </div>
@@ -98,7 +98,18 @@
               <el-option label="现金" value="cash" />
             </el-select>
           </label>
+          <label class="full">
+            回款凭证
+            <el-upload :auto-upload="false" :on-change="onPaymentFile" :limit="1" :show-file-list="false">
+              <el-button :loading="paymentRecognizing">选择并识别回款凭证</el-button>
+            </el-upload>
+          </label>
+          <label class="full">
+            备注
+            <el-input v-model="payment.remark" type="textarea" :rows="3" placeholder="流水号、付款方、收款方或其他说明" />
+          </label>
         </div>
+        <el-alert v-if="paymentOcrStatus" :title="paymentOcrStatus" type="info" :closable="false" style="margin-top: 12px" />
         <div class="rule-box">
           <div>
             <strong>回款校验</strong>
@@ -166,12 +177,16 @@
         <el-table-column prop="seller" label="销方" />
       </el-table>
       <el-table :data="payments" empty-text="暂无回款记录" style="margin-top: 16px">
-        <el-table-column prop="invoice_id" label="发票ID" />
+        <el-table-column prop="invoice_no" label="关联发票" />
         <el-table-column label="回款金额">
           <template #default="{ row }">{{ money(row.amount) }}</template>
         </el-table-column>
         <el-table-column prop="payment_date" label="回款日期" />
         <el-table-column prop="payment_method" label="方式" />
+        <el-table-column label="凭证">
+          <template #default="{ row }">{{ row.voucher_file ? '已上传' : '未上传' }}</template>
+        </el-table-column>
+        <el-table-column prop="remark" label="备注" />
       </el-table>
     </section>
   </section>
@@ -186,13 +201,23 @@ const projectOptions = ref<any[]>([])
 const invoices = ref<any[]>([])
 const payments = ref<any[]>([])
 const invoiceFile = ref<any>(null)
+const paymentFile = ref<any>(null)
 const ocrStatus = ref('')
+const paymentOcrStatus = ref('')
+const invoiceRecognizing = ref(false)
+const paymentRecognizing = ref(false)
 const invoice = reactive({ project_id: '', invoice_no: '', amount: '', invoice_date: '', invoice_type: 'special', buyer: '', seller: '' })
-const payment = reactive({ project_id: '', invoice_id: '', amount: '', payment_date: '', payment_method: 'bank' })
+const payment = reactive({ project_id: '', invoice_id: '', amount: '', payment_date: '', payment_method: 'bank', remark: '' })
 const summary = reactive<any>({ project_id: null, contract_amount: 0, invoiced_amount: 0, paid_amount: 0, receivable: 0, remaining_invoice_amount: 0, invoice_progress: 0, payment_progress: 0 })
 
-function onInvoiceFile(upload: any) {
+async function onInvoiceFile(upload: any) {
   invoiceFile.value = upload.raw
+  if (invoiceFile.value) await recognizeInvoice()
+}
+
+async function onPaymentFile(upload: any) {
+  paymentFile.value = upload.raw
+  if (paymentFile.value) await recognizePayment()
 }
 
 async function loadOptions() {
@@ -225,16 +250,40 @@ async function refreshFinance(projectId?: number | string) {
 
 async function recognizeInvoice() {
   if (!invoiceFile.value) return
-  const data = new FormData()
-  data.append('file', invoiceFile.value)
-  const res: any = await http.post('/ocr/invoice', data)
-  const extracted = res.data.extracted_info || {}
-  invoice.invoice_no = extracted.invoice_no || invoice.invoice_no
-  invoice.amount = extracted.amount || invoice.amount
-  invoice.invoice_date = extracted.invoice_date || invoice.invoice_date
-  invoice.buyer = extracted.buyer || invoice.buyer
-  invoice.seller = extracted.seller || invoice.seller
-  ocrStatus.value = res.data.status === 'success' ? '识别成功，已回填可识别字段' : '识别失败或置信度不足，请手动填写'
+  invoiceRecognizing.value = true
+  ocrStatus.value = '正在识别发票...'
+  try {
+    const data = new FormData()
+    data.append('file', invoiceFile.value)
+    const res: any = await http.post('/ocr/invoice', data)
+    const extracted = res.data.extracted_info || {}
+    invoice.invoice_no = extracted.invoice_no || invoice.invoice_no
+    invoice.amount = extracted.amount || invoice.amount
+    invoice.invoice_date = extracted.invoice_date || invoice.invoice_date
+    invoice.buyer = extracted.buyer || invoice.buyer
+    invoice.seller = extracted.seller || invoice.seller
+    ocrStatus.value = res.data.status === 'success' ? '识别成功，已回填可识别字段' : `识别失败或置信度不足，请手动填写${res.data.error_message ? `：${res.data.error_message}` : ''}`
+  } finally {
+    invoiceRecognizing.value = false
+  }
+}
+
+async function recognizePayment() {
+  if (!paymentFile.value) return
+  paymentRecognizing.value = true
+  paymentOcrStatus.value = '正在识别回款凭证...'
+  try {
+    const data = new FormData()
+    data.append('file', paymentFile.value)
+    const res: any = await http.post('/ocr/payment', data)
+    const extracted = res.data.extracted_info || {}
+    payment.amount = extracted.amount || payment.amount
+    payment.payment_date = extracted.payment_date || payment.payment_date
+    payment.remark = extracted.remark || payment.remark
+    paymentOcrStatus.value = res.data.status === 'success' ? '识别成功，已回填可识别字段' : `识别失败或置信度不足，请手动填写${res.data.error_message ? `：${res.data.error_message}` : ''}`
+  } finally {
+    paymentRecognizing.value = false
+  }
 }
 
 async function createInvoice() {
@@ -249,8 +298,11 @@ async function createInvoice() {
 async function createPayment() {
   const data = new FormData()
   Object.entries(payment).forEach(([k, v]) => data.append(k, String(v)))
+  if (paymentFile.value) data.append('voucher_file', paymentFile.value)
   await http.post('/payment/create', data)
   ElMessage.success('回款登记成功')
+  paymentFile.value = null
+  Object.assign(payment, { project_id: payment.project_id, invoice_id: '', amount: '', payment_date: '', payment_method: 'bank', remark: '' })
   await refreshFinance(payment.project_id)
 }
 
