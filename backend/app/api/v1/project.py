@@ -74,6 +74,47 @@ def _apply_extracted_to_project(project: Project, extracted: dict, fallback_name
             pass
 
 
+def _project_out(db: Session, project: Project) -> dict:
+    data = ProjectOut.model_validate(project).model_dump()
+    latest_instance = (
+        db.query(ApprovalInstance)
+        .filter(ApprovalInstance.business_type == "project", ApprovalInstance.business_id == project.id)
+        .order_by(ApprovalInstance.start_time.desc(), ApprovalInstance.id.desc())
+        .first()
+    )
+    latest_record = (
+        db.query(ApprovalRecord)
+        .filter(ApprovalRecord.instance_id == latest_instance.id)
+        .order_by(ApprovalRecord.id.desc())
+        .first()
+        if latest_instance else None
+    )
+    latest_status = latest_instance.status if latest_instance else None
+    rejected_draft = project.status == PROJECT_DRAFT and latest_status == APPROVAL_REJECTED
+    receivable = calculate_receivable(db, project.id)
+    pending_close = (
+        db.query(ProjectClose)
+        .filter(ProjectClose.project_id == project.id, ProjectClose.status == APPROVAL_PENDING)
+        .order_by(ProjectClose.create_time.desc())
+        .first()
+    )
+    display_status = "rejected_draft" if rejected_draft else project.status
+    if pending_close:
+        display_status = "pending_close_unpaid" if not receivable["is_payment_complete"] else "pending_close"
+    data.update({
+        "approval_status": latest_status,
+        "display_status": display_status,
+        "is_rejected_draft": rejected_draft,
+        "pending_close_id": pending_close.id if pending_close else None,
+        "is_payment_complete": receivable["is_payment_complete"],
+        "unpaid_amount": receivable["unpaid_amount"],
+        "payment_status_label": receivable["payment_status_label"],
+        "rejection_opinion": latest_record.opinion if latest_record and latest_record.status == APPROVAL_REJECTED else None,
+        "rejection_reason": latest_record.reason if latest_record and latest_record.status == APPROVAL_REJECTED else None,
+    })
+    return data
+
+
 # ── 项目编号 ──────────────────────────────────────────────────────────────
 
 
@@ -246,7 +287,18 @@ def project_options(usage: str | None = None, db: Session = Depends(get_db), use
         query = query.filter(Project.status == PROJECT_ACTIVE)
     projects = query.order_by(Project.create_time.desc()).all()
     return ok([
-        {"id": p.id, "project_no": p.project_no, "contract_no": p.contract_no, "name": p.name, "customer": p.customer, "party_a": p.party_a, "party_b": p.party_b, "amount": float(p.amount or 0), "status": p.status}
+        {
+            "id": p.id,
+            "project_no": p.project_no,
+            "contract_no": p.contract_no,
+            "name": p.name,
+            "customer": p.customer,
+            "party_a": p.party_a,
+            "party_b": p.party_b,
+            "amount": float(p.amount or 0),
+            "status": p.status,
+            **calculate_receivable(db, p.id),
+        }
         for p in projects
     ])
 
@@ -262,7 +314,7 @@ def project_detail(project_id: int, db: Session = Depends(get_db), user: User = 
     payments = db.query(Payment).filter(Payment.project_id == project_id).order_by(Payment.create_time.desc()).all()
     closes = db.query(ProjectClose).filter(ProjectClose.project_id == project_id).order_by(ProjectClose.create_time.desc()).all()
     approvals = db.query(ApprovalInstance).filter(ApprovalInstance.business_id.in_([project_id] + [c.id for c in closes])).order_by(ApprovalInstance.start_time.desc()).all()
-    project_data = ProjectOut.model_validate(project).model_dump()
+    project_data = _project_out(db, project)
     project_data.update({
         "description": project.description,
         "start_date": project.start_date.isoformat() if project.start_date else None,
@@ -307,11 +359,16 @@ def list_projects(
     if keyword:
         like = f"%{keyword}%"
         query = query.filter((Project.name.like(like)) | (Project.project_no.like(like)) | (Project.customer.like(like)))
-    if status:
+    if status and status != "rejected_draft":
         query = query.filter(Project.status == status)
+    if status == "rejected_draft":
+        projects = query.filter(Project.status == PROJECT_DRAFT).order_by(Project.create_time.desc()).all()
+        items = [item for item in (_project_out(db, p) for p in projects) if item["is_rejected_draft"]]
+        total = len(items)
+        return paginated(items[pg.offset:pg.offset + pg.limit], total, pg.page, pg.page_size)
     total = query.count()
     projects = query.order_by(Project.create_time.desc()).offset(pg.offset).limit(pg.limit).all()
-    return paginated([ProjectOut.model_validate(p).model_dump() for p in projects], total, pg.page, pg.page_size)
+    return paginated([_project_out(db, p) for p in projects], total, pg.page, pg.page_size)
 
 
 # ── 项目操作 ──────────────────────────────────────────────────────────────
@@ -485,7 +542,9 @@ def confirm_diff(payload: ContractDiffConfirmIn, db: Session = Depends(get_db), 
         apply_diff_value(project, diff.field_name, payload.adopted_value, db)
     log_action(db, user, "contract_diff_confirm", f"diff:{diff.id} {payload.diff_status}")
     db.commit()
-    return ok(message="确认成功")
+    if project:
+        db.refresh(project)
+    return ok({"project": _project_out(db, project)} if project else None, "确认成功")
 
 
 @router.get("/diff/list")

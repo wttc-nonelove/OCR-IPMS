@@ -12,10 +12,17 @@
         <div class="form-grid compact">
           <label class="full">
             项目
-            <el-select v-model="form.project_id" placeholder="选择已立项/进行中项目" style="width: 100%">
-              <el-option v-for="project in projectOptions" :key="project.id" :label="`${project.project_no} ${project.name}`" :value="project.id" />
+            <el-select v-model="form.project_id" placeholder="选择已立项/进行中项目" style="width: 100%" @change="loadSelectedSummary">
+              <el-option v-for="project in projectOptions" :key="project.id" :label="`${project.project_no} ${project.name} / ${project.payment_status_label || '回款状态未知'}`" :value="project.id" />
             </el-select>
           </label>
+          <el-alert
+            v-if="selectedSummary.project_id && !selectedSummary.is_payment_complete"
+            class="full"
+            :title="selectedSummary.payment_status_label || '回款未完成'"
+            type="warning"
+            :closable="false"
+          />
           <label>
             结项时间
             <el-date-picker v-model="form.close_time" value-format="YYYY-MM-DD" placeholder="结项时间" style="width: 100%" />
@@ -131,6 +138,7 @@
           <el-descriptions-item label="实际开始">{{ closeDetail.actual_start || '-' }}</el-descriptions-item>
           <el-descriptions-item label="结项时间">{{ closeDetail.close_time || '-' }}</el-descriptions-item>
           <el-descriptions-item label="尾款状态">{{ closeDetail.balance_status || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="回款状态">{{ closeDetail.receivable?.payment_status_label || '-' }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ closeDetail.status || '-' }}</el-descriptions-item>
           <el-descriptions-item label="验收报告">{{ closeDetail.report_file ? fileName(closeDetail.report_file) : '未上传' }}</el-descriptions-item>
           <el-descriptions-item label="其他附件">{{ closeDetail.attachment ? fileName(closeDetail.attachment) : '未上传' }}</el-descriptions-item>
@@ -157,7 +165,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { http } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 
@@ -172,6 +180,7 @@ const attachmentFileName = ref('')
 const detailVisible = ref(false)
 const closeDetail = ref<any>(null)
 const form = reactive({ project_id: '', close_time: '', description: '' })
+const selectedSummary = reactive<any>({ project_id: null, is_payment_complete: true, unpaid_amount: 0, payment_status_label: '' })
 
 function onReportFile(upload: any) {
   reportFile.value = upload.raw
@@ -198,6 +207,16 @@ async function loadProjects() {
   projectOptions.value = res.data
 }
 
+async function loadSelectedSummary(projectId?: number | string) {
+  const id = projectId || form.project_id
+  if (!id) {
+    Object.assign(selectedSummary, { project_id: null, is_payment_complete: true, unpaid_amount: 0, payment_status_label: '' })
+    return
+  }
+  const res: any = await http.get('/finance/summary', { params: { project_id: id } })
+  Object.assign(selectedSummary, res.data || {})
+}
+
 async function load() {
   const [closeRes, taskRes]: any[] = await Promise.all([http.get('/close/list'), http.get('/approval/task/list')])
   items.value = closeRes.data.items
@@ -205,6 +224,18 @@ async function load() {
 }
 
 async function apply() {
+  await loadSelectedSummary()
+  if (selectedSummary.project_id && !selectedSummary.is_payment_complete) {
+    try {
+      await ElMessageBox.confirm(`${selectedSummary.payment_status_label}。仍然提交结项审批吗？`, '回款未完成', {
+        confirmButtonText: '继续提交',
+        cancelButtonText: '取消',
+        type: 'warning'
+      })
+    } catch {
+      return
+    }
+  }
   const data = new FormData()
   Object.entries(form).forEach(([k, v]) => data.append(k, String(v)))
   if (reportFile.value) data.append('report_file', reportFile.value)
@@ -212,6 +243,7 @@ async function apply() {
   await http.post('/close/apply', data)
   ElMessage.success('已提交')
   Object.assign(form, { project_id: '', close_time: '', description: '' })
+  Object.assign(selectedSummary, { project_id: null, is_payment_complete: true, unpaid_amount: 0, payment_status_label: '' })
   clearReportFile()
   clearAttachmentFile()
   await Promise.all([load(), loadProjects()])

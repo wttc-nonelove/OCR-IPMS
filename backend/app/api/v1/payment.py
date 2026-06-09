@@ -1,13 +1,13 @@
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import Pagination, get_pagination, require_roles
 from app.db.session import get_db
 from app.models.entities import Payment, User
-from app.models.enums import ADMIN, FINANCE
+from app.models.enums import ADMIN, FINANCE, PM
 from app.schemas.common import ok, paginated
 from app.services.audit import log_action
 from app.services.files import save_upload
@@ -21,7 +21,7 @@ def list_payments(
     project_id: int | None = None,
     pg: Pagination = Depends(get_pagination),
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(FINANCE, ADMIN)),
+    user: User = Depends(require_roles(FINANCE, ADMIN, PM)),
 ):
     query = db.query(Payment)
     if project_id:
@@ -66,3 +66,17 @@ async def create_payment(
     log_action(db, user, "payment_create", f"project:{project_id} invoice:{invoice_id} amount:{amount}")
     db.commit()
     return ok({"id": payment.id, "receivable": data}, "回款登记成功")
+
+
+@router.delete("/{payment_id}")
+def delete_payment(payment_id: int, db: Session = Depends(get_db), user: User = Depends(require_roles(FINANCE))):
+    payment = db.query(Payment).filter(Payment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="回款记录不存在")
+    project_id = payment.project_id
+    summary = f"project:{payment.project_id} invoice:{payment.invoice_id} amount:{payment.amount}"
+    db.delete(payment)
+    data = calculate_receivable(db, project_id)
+    log_action(db, user, "payment_delete", summary)
+    db.commit()
+    return ok({"receivable": data}, "回款已删除")

@@ -13,14 +13,24 @@ def calculate_receivable(db: Session, project_id: int) -> dict:
     invoiced = db.query(func.coalesce(func.sum(Invoice.amount), 0)).filter(Invoice.project_id == project_id).scalar() or Decimal("0")
     paid = db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(Payment.project_id == project_id).scalar() or Decimal("0")
     receivable = invoiced - paid
-    if paid >= project.amount and project.amount > 0:
+    unpaid = max(receivable, Decimal("0"))
+    is_payment_complete = invoiced > 0 and unpaid <= 0
+    if is_payment_complete:
         balance = BALANCE_SETTLED
     elif paid > 0:
         balance = BALANCE_PARTIAL
     else:
         balance = BALANCE_WAITING
     project.balance_status = balance
-    return {"invoiced_amount": float(invoiced), "paid_amount": float(paid), "receivable": float(receivable), "balance_status": balance}
+    return {
+        "invoiced_amount": float(invoiced),
+        "paid_amount": float(paid),
+        "receivable": float(receivable),
+        "unpaid_amount": float(unpaid),
+        "is_payment_complete": is_payment_complete,
+        "payment_status_label": "回款已完成" if is_payment_complete else f"回款未完成 / 未回款金额 ¥{float(unpaid):,.2f}",
+        "balance_status": balance,
+    }
 
 
 def validate_invoice_amount(db: Session, project_id: int, amount_without_tax: Decimal) -> Project:
@@ -45,5 +55,5 @@ def validate_payment_amount(db: Session, project_id: int, invoice_id: int, amoun
         raise HTTPException(status_code=404, detail="关联发票不存在")
     paid = db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(Payment.invoice_id == invoice_id).scalar() or Decimal("0")
     if paid + amount > invoice.amount:
-        raise HTTPException(status_code=400, detail="回款金额超过关联发票金额")
+        raise HTTPException(status_code=400, detail="回款金额超过关联发票价税合计金额")
     return invoice

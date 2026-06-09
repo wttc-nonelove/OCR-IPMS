@@ -15,9 +15,13 @@
             <strong>Word 合同附件</strong>
             <span>.doc / .docx 选择后立即解析，识别不到的字段可手动补充</span>
           </div>
-          <el-upload :auto-upload="false" :on-change="onWordFile" :limit="1" :show-file-list="false">
+          <el-upload ref="wordUploadRef" :auto-upload="false" :on-change="onWordFile" :limit="1" :show-file-list="false">
             <el-button type="primary" :loading="parsingWord">选择并解析 Word</el-button>
           </el-upload>
+        </div>
+        <div v-if="wordFileName" class="upload-meta">
+          <span class="muted">已选择：{{ wordFileName }}</span>
+          <el-button link type="danger" @click="clearWordUpload">取消文件</el-button>
         </div>
 
         <el-alert v-if="parseMessage" :title="parseMessage" :type="parseAlertType" :closable="false" style="margin-bottom: 14px" />
@@ -69,7 +73,7 @@
         </div>
       </section>
 
-      <section v-if="auth.user?.role === 'business' || auth.user?.role === 'admin'" class="panel">
+      <section v-if="auth.user?.role === 'business'" class="panel">
         <div class="panel-head">
           <h2>盖章合同差异生成</h2>
           <span class="badge info">PDF/图片 OCR</span>
@@ -77,9 +81,13 @@
         <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 100%; margin-bottom: 12px" @change="loadDiffs">
           <el-option v-for="project in projects" :key="project.id" :label="projectOptionLabel(project)" :value="project.id" />
         </el-select>
-        <el-upload :auto-upload="false" :on-change="onPdfFile" :limit="1" :show-file-list="false">
+        <el-upload ref="pdfUploadRef" :auto-upload="false" :on-change="onPdfFile" :limit="1" :show-file-list="false">
           <el-button :loading="parsingPdf">选择并解析 PDF/图片合同</el-button>
         </el-upload>
+        <div v-if="pdfFileName" class="upload-meta">
+          <span class="muted">已选择：{{ pdfFileName }}</span>
+          <el-button link type="danger" @click="clearPdfUpload">取消文件</el-button>
+        </div>
         <el-alert v-if="pdfMessage" :title="pdfMessage" :type="pdfAlertType" :closable="false" style="margin-top: 12px" />
         <el-alert
           v-if="pdfUnrecognized.length"
@@ -97,7 +105,7 @@
       </section>
     </div>
 
-    <section v-if="auth.user?.role === 'business' || auth.user?.role === 'admin'" class="panel">
+    <section v-if="auth.user?.role === 'business'" class="panel">
       <div class="panel-head">
         <div>
           <h2>合同差异确认</h2>
@@ -143,6 +151,7 @@
           <el-input v-model="keyword" placeholder="项目名称 / 编号 / 甲方" style="width: 240px" />
           <el-select v-model="status" clearable placeholder="状态" style="width: 140px">
             <el-option label="草稿" value="draft" />
+            <el-option label="已驳回草稿" value="rejected_draft" />
             <el-option label="待审核" value="pending" />
             <el-option label="已立项" value="approved" />
             <el-option label="进行中" value="active" />
@@ -163,7 +172,7 @@
         </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <span class="status" :class="statusClass(row.status)">{{ statusText(row.status) }}</span>
+            <span class="status" :class="statusClass(row.display_status || row.status)">{{ statusText(row.display_status || row.status) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="430" fixed="right">
@@ -199,7 +208,7 @@
           <el-descriptions-item label="项目编号">{{ projectDetail.project.project_no }}</el-descriptions-item>
           <el-descriptions-item label="合同编号">{{ projectDetail.project.contract_no || '-' }}</el-descriptions-item>
           <el-descriptions-item label="项目名称">{{ projectDetail.project.name }}</el-descriptions-item>
-          <el-descriptions-item label="项目状态">{{ statusText(projectDetail.project.status) }}</el-descriptions-item>
+          <el-descriptions-item label="项目状态">{{ statusText(projectDetail.project.display_status || projectDetail.project.status) }}</el-descriptions-item>
           <el-descriptions-item label="甲方/客户">{{ projectDetail.project.party_a || projectDetail.project.customer || '-' }}</el-descriptions-item>
           <el-descriptions-item label="乙方">{{ projectDetail.project.party_b || '-' }}</el-descriptions-item>
           <el-descriptions-item label="合同金额">{{ money(projectDetail.project.amount) }}</el-descriptions-item>
@@ -216,6 +225,47 @@
           <el-table-column prop="version" label="版本" width="80" />
           <el-table-column prop="upload_time" label="上传时间" min-width="160" />
         </el-table>
+
+        <template v-if="auth.user?.role === 'admin' || auth.user?.role === 'pm' || auth.user?.role === 'finance'">
+          <h3 class="dialog-section-title">财务明细</h3>
+          <el-descriptions :column="4" border>
+            <el-descriptions-item label="累计开票">{{ money(projectDetail.receivable?.invoiced_amount) }}</el-descriptions-item>
+            <el-descriptions-item label="累计回款">{{ money(projectDetail.receivable?.paid_amount) }}</el-descriptions-item>
+            <el-descriptions-item label="应收款">{{ money(projectDetail.receivable?.receivable) }}</el-descriptions-item>
+            <el-descriptions-item label="尾款状态">{{ projectDetail.receivable?.balance_status || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="回款状态" :span="4">{{ projectDetail.receivable?.payment_status_label || projectDetail.project.payment_status_label || '-' }}</el-descriptions-item>
+          </el-descriptions>
+          <el-table :data="projectDetail.invoices" empty-text="暂无发票记录" style="margin-top: 12px">
+            <el-table-column prop="invoice_no" label="发票号码" min-width="130" />
+            <el-table-column label="不含税金额" width="120">
+              <template #default="{ row }">{{ money(row.amount_without_tax) }}</template>
+            </el-table-column>
+            <el-table-column label="税率" width="80">
+              <template #default="{ row }">{{ row.tax_rate ? `${row.tax_rate}%` : '-' }}</template>
+            </el-table-column>
+            <el-table-column label="税额" width="110">
+              <template #default="{ row }">{{ money(row.tax_amount) }}</template>
+            </el-table-column>
+            <el-table-column label="价税合计" width="120">
+              <template #default="{ row }">{{ money(row.amount) }}</template>
+            </el-table-column>
+            <el-table-column prop="invoice_date" label="开票日期" width="120" />
+            <el-table-column prop="buyer" label="购方" min-width="150" />
+            <el-table-column prop="seller" label="销方" min-width="150" />
+          </el-table>
+          <el-table :data="projectDetail.payments" empty-text="暂无回款记录" style="margin-top: 12px">
+            <el-table-column prop="invoice_no" label="关联发票" min-width="130" />
+            <el-table-column label="回款金额" width="120">
+              <template #default="{ row }">{{ money(row.amount) }}</template>
+            </el-table-column>
+            <el-table-column prop="payment_date" label="回款日期" width="120" />
+            <el-table-column prop="payment_method" label="方式" width="90" />
+            <el-table-column label="凭证" width="90">
+              <template #default="{ row }">{{ row.voucher_file ? '已上传' : '未上传' }}</template>
+            </el-table-column>
+            <el-table-column prop="remark" label="备注" min-width="180" />
+          </el-table>
+        </template>
 
         <h3 class="dialog-section-title">审批记录</h3>
         <el-table :data="projectDetail.approvals" empty-text="暂无审批记录">
@@ -262,6 +312,10 @@ const saving = ref(false)
 const saveStatus = ref('')
 const parseMessage = ref('')
 const pdfMessage = ref('')
+const wordFileName = ref('')
+const pdfFileName = ref('')
+const wordUploadRef = ref<any>(null)
+const pdfUploadRef = ref<any>(null)
 const pdfUnrecognized = ref<any[]>([])
 const pdfParseStatus = ref('')
 const pdfRawPreview = ref('')
@@ -292,6 +346,7 @@ const pdfAlertType = computed(() => {
 
 async function onWordFile(upload: UploadFile) {
   if (!upload.raw) return
+  wordFileName.value = upload.name || upload.raw.name || ''
   parsingWord.value = true
   parseMessage.value = '正在解析 Word 合同...'
   try {
@@ -312,6 +367,7 @@ async function onWordFile(upload: UploadFile) {
 
 async function onPdfFile(upload: UploadFile) {
   if (!upload.raw) return
+  pdfFileName.value = upload.name || upload.raw.name || ''
   if (!selectedProjectId.value) {
     ElMessage.warning('请先选择项目')
     return
@@ -332,6 +388,21 @@ async function onPdfFile(upload: UploadFile) {
   } finally {
     parsingPdf.value = false
   }
+}
+
+function clearWordUpload() {
+  wordFileName.value = ''
+  parseMessage.value = ''
+  wordUploadRef.value?.clearFiles?.()
+}
+
+function clearPdfUpload() {
+  pdfFileName.value = ''
+  pdfMessage.value = ''
+  pdfUnrecognized.value = []
+  pdfParseStatus.value = ''
+  pdfRawPreview.value = ''
+  pdfUploadRef.value?.clearFiles?.()
 }
 
 async function loadNextNo() {
@@ -455,12 +526,16 @@ async function loadDiffs() {
 }
 
 async function confirmDiff(row: any) {
-  await http.post('/project/contract-diff/confirm', {
+  const res: any = await http.post('/project/contract-diff/confirm', {
     diff_id: row.id,
     adopted_value: row.adopted_value || row.recognized_value || row.registered_value,
     diff_status: 'confirmed',
     remark: row.remark || ''
   })
+  if (res.data?.project && form.id === res.data.project.id) {
+    applyProject(res.data.project)
+    saveStatus.value = '已同步合同差异采用值'
+  }
   ElMessage.success('差异已确认')
   await Promise.all([loadDiffs(), load()])
   if (projectDetail.value?.project?.id) await loadProjectDetail(projectDetail.value.project.id)
@@ -558,11 +633,11 @@ function money(value: number) {
 }
 
 function statusText(value: string) {
-  return ({ draft: '草稿', pending: '待审核', approved: '已立项', active: '进行中', closed: '已结项' } as Record<string, string>)[value] || value
+  return ({ draft: '草稿', rejected_draft: '已驳回草稿', pending: '待审核', approved: '已立项', active: '进行中', closed: '已结项', pending_close: '结项审批中', pending_close_unpaid: '待回款结项审批中' } as Record<string, string>)[value] || value
 }
 
 function statusClass(value: string) {
-  return ({ draft: 'muted', pending: 'warn', approved: 'ok', active: 'info', closed: 'muted' } as Record<string, string>)[value] || ''
+  return ({ draft: 'muted', rejected_draft: 'danger', pending: 'warn', approved: 'ok', active: 'info', closed: 'muted', pending_close: 'warn', pending_close_unpaid: 'danger' } as Record<string, string>)[value] || ''
 }
 
 let saveTimer: number | undefined

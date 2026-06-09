@@ -255,6 +255,14 @@ textarea {
   color: var(--muted);
 }
 
+.upload-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 14px;
+  min-height: 24px;
+}
+
 .metric-card strong {
   margin-top: 10px;
   display: block;

@@ -3,12 +3,13 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import Pagination, get_pagination, require_roles
 from app.db.session import get_db
-from app.models.entities import Invoice, User
-from app.models.enums import ADMIN, FINANCE
+from app.models.entities import Invoice, Payment, User
+from app.models.enums import ADMIN, FINANCE, PM
 from app.schemas.common import ok, paginated
 from app.services.audit import log_action
 from app.services.approval import create_approval_instance
@@ -63,7 +64,7 @@ def list_invoices(
     project_id: int | None = None,
     pg: Pagination = Depends(get_pagination),
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(FINANCE, ADMIN)),
+    user: User = Depends(require_roles(FINANCE, ADMIN, PM)),
 ):
     query = db.query(Invoice)
     if project_id:
@@ -140,7 +141,24 @@ async def create_invoice(
 
 
 @router.get("/receivable")
-def receivable(project_id: int, db: Session = Depends(get_db), user: User = Depends(require_roles(FINANCE, ADMIN))):
+def receivable(project_id: int, db: Session = Depends(get_db), user: User = Depends(require_roles(FINANCE, ADMIN, PM))):
     data = calculate_receivable(db, project_id)
     db.commit()
     return ok(data)
+
+
+@router.delete("/{invoice_id}")
+def delete_invoice(invoice_id: int, db: Session = Depends(get_db), user: User = Depends(require_roles(FINANCE))):
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="发票不存在")
+    payment_count = db.query(func.count(Payment.id)).filter(Payment.invoice_id == invoice.id).scalar() or 0
+    if payment_count:
+        raise HTTPException(status_code=400, detail="该发票有回款不允许删除")
+    project_id = invoice.project_id
+    invoice_no = invoice.invoice_no
+    db.delete(invoice)
+    data = calculate_receivable(db, project_id)
+    log_action(db, user, "invoice_delete", f"{invoice_no} project:{project_id}")
+    db.commit()
+    return ok({"receivable": data}, "发票已删除")

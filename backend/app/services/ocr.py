@@ -58,9 +58,177 @@ def _decimal_text(value: str | None) -> str:
     if not value:
         return ""
     try:
-        return f"{Decimal(value.replace(',', '')).quantize(Decimal('0.01'))}"
+        normalized = value.replace(",", "").strip()
+        if normalized.count(".") > 1:
+            parts = normalized.split(".")
+            normalized = "".join(parts[:-1]) + "." + parts[-1]
+        return f"{Decimal(normalized).quantize(Decimal('0.01'))}"
     except (InvalidOperation, AttributeError):
         return ""
+
+
+def _to_decimal(value: str | None) -> Decimal | None:
+    amount = _decimal_text(value)
+    if not amount:
+        return None
+    try:
+        return Decimal(amount)
+    except InvalidOperation:
+        return None
+
+
+def _money_values(text: str) -> list[str]:
+    values: list[str] = []
+    for match in re.finditer(r"([¥￥]\s*)?([0-9][0-9,\.]*\d)", _normalize_text(text)):
+        raw = match.group(2)
+        if re.match(r"20\d{2}[./-]\d{1,2}[./-]\d{1,2}$", raw):
+            continue
+        if not match.group(1) and "." not in raw and "," not in raw:
+            continue
+        amount = _decimal_text(raw)
+        if not amount:
+            continue
+        value = Decimal(amount)
+        # 票据代码、税号、电话、日期等没有小数或金额过小，排除掉避免污染候选。
+        if value >= Decimal("100"):
+            values.append(amount)
+    return values
+
+
+def _extract_amount_by_labels(text: str, labels: list[str], window: int = 160, prefer: str = "first") -> str:
+    text = _normalize_text(text)
+    for label in labels:
+        for match in re.finditer(re.escape(label), text, re.I):
+            snippet = text[match.end(): match.end() + window]
+            values = _money_values(snippet)
+            if values:
+                if prefer == "max":
+                    return max(values, key=Decimal)
+                if prefer == "last":
+                    return values[-1]
+                return values[0]
+    return ""
+
+
+def _line_values(text: str) -> list[str]:
+    return [line.strip() for line in re.split(r"[\n\r]+", _normalize_text(text)) if line.strip()]
+
+
+def _contains_any(text: str, labels: list[str]) -> bool:
+    return any(label in text for label in labels)
+
+
+def _payment_amount_candidates(text: str) -> list[str]:
+    values = []
+    for value in _money_values(text):
+        if value not in values:
+            values.append(value)
+    return values
+
+
+def _extract_payment_amount(text: str) -> tuple[str, list[str], str]:
+    """Extract the actual payment amount from generic voucher text.
+
+    The rule is label/table driven. It never relies on a fixed sample value, file
+    name, or image position.
+    """
+    lines = _line_values(text)
+    target_labels = ["本次回款金额", "本次收款金额", "本次付款金额", "本次到账金额", "回款金额", "收款金额"]
+    invoice_amount_labels = ["发票金额", "票面金额", "价税合计"]
+    all_candidates = _payment_amount_candidates(text)
+
+    for index, line in enumerate(lines):
+        if not _contains_any(line, target_labels):
+            continue
+        target_pos = min((line.find(label) for label in target_labels if label in line), default=-1)
+        same_line = []
+        for label in target_labels:
+            if label in line:
+                same_line = _money_values(line.split(label, 1)[1])
+                break
+        if same_line:
+            return same_line[0], all_candidates, ""
+
+        header_window = lines[max(0, index - 2): index + 1]
+        prior_amount_columns = 0
+        for item in header_window:
+            if item == line and target_pos >= 0:
+                prior_amount_columns += sum(1 for label in invoice_amount_labels if 0 <= item.find(label) < target_pos)
+            elif _contains_any(item, invoice_amount_labels):
+                prior_amount_columns += 1
+        money_after: list[str] = []
+        for next_line in lines[index + 1: index + 12]:
+            money_after.extend(_money_values(next_line))
+        if len(money_after) > prior_amount_columns:
+            return money_after[prior_amount_columns], all_candidates, ""
+
+    for label in target_labels:
+        amount = _extract_amount_by_labels(text, [label], window=120, prefer="first")
+        if amount:
+            return amount, all_candidates, ""
+
+    if len(all_candidates) == 1:
+        return all_candidates[0], all_candidates, ""
+    return "", all_candidates, "未能可靠定位本次回款金额，请人工确认"
+
+
+def _section_between(text: str, start_patterns: list[str], end_patterns: list[str]) -> str:
+    text = _normalize_text(text)
+    start = None
+    for pattern in start_patterns:
+        match = re.search(pattern, text, re.I)
+        if match and (start is None or match.start() < start.start()):
+            start = match
+    if not start:
+        return ""
+    end_index = len(text)
+    for pattern in end_patterns:
+        match = re.search(pattern, text[start.end():], re.I)
+        if match:
+            end_index = min(end_index, start.end() + match.start())
+    return text[start.end():end_index]
+
+
+def _extract_section_name(section: str) -> str:
+    section = _normalize_text(section)
+    for line in re.split(r"[\n\r]+", section):
+        match = re.search(r"名\s*称\s*[:：]\s*(.+)", line.strip())
+        if match:
+            value = _clean_value(match.group(1))
+            if value:
+                return value
+    match = re.search(r"名\s*称\s*[:：]\s*([^\n\r]+)", section)
+    return _clean_value(match.group(1)) if match else ""
+
+
+def _invoice_names(text: str) -> list[str]:
+    names = []
+    for match in re.finditer(r"名\s*称\s*[:：]\s*([^\n\r]+)", _normalize_text(text)):
+        value = _clean_value(match.group(1))
+        if value and value not in names:
+            names.append(value)
+    return names
+
+
+def _extract_invoice_party(text: str, role: str) -> str:
+    names = _invoice_names(text)
+    if role == "buyer":
+        section = _section_between(
+            text,
+            [r"购买方", r"购\s*买\s*方", r"买方"],
+            [r"密码区", r"货物或应税劳务", r"货物或应税务", r"规格型号", r"销售方", r"销\s*售\s*方"],
+        )
+        fallback_labels = ["购买方名称", "购方名称", "买方名称", "购买方", "购方", "买方"]
+        fallback_name = names[0] if names else ""
+    else:
+        section = _section_between(
+            text,
+            [r"销售方", r"销\s*售\s*方", r"销方", r"卖方"],
+            [r"备注", r"收款人", r"复核", r"开票人", r"销售方\s*[:：]?\s*[（(]?章"],
+        )
+        fallback_labels = ["销售方名称", "销方名称", "卖方名称", "销售方", "销方", "卖方"]
+        fallback_name = names[1] if len(names) > 1 else ""
+    return _extract_section_name(section) or fallback_name or _match_after(text, fallback_labels)
 
 
 def _parse_chinese_section(section: str) -> int:
@@ -135,7 +303,7 @@ def _extract_amount(text: str, labels: list[str] | None = None) -> str:
     candidates = []
     for match in re.finditer(r"\b([0-9][0-9,]*(?:\.\d{1,2})?)\b", text):
         raw = match.group(1)
-        if re.fullmatch(r"20\d{2}", raw):
+        if re.fullmatch(r"20\d{2}", raw) or ("." not in raw and "," not in raw):
             continue
         amount = _decimal_text(raw)
         if amount:
@@ -153,27 +321,38 @@ def _extract_date(text: str) -> str:
 
 def _match_after(text: str, labels: list[str], limit: int = 120) -> str:
     text = _normalize_text(text)
-    for line in re.split(r"[\n\r]+", text):
+    lines = [line.strip() for line in re.split(r"[\n\r]+", text)]
+    for index, line in enumerate(lines):
         normalized = line.strip()
         for label in labels:
-            match = re.search(rf"{re.escape(label)}(?:[（(][^）)]*[）)])?\s*[:：]?\s*(.+)$", normalized)
+            match = re.search(rf"{re.escape(label)}\s*(?:[（(][^）)]*[）)])?\s*[:：]?\s*(.*)$", normalized)
             if match:
-                return _clean_value(match.group(1), limit)
+                value = _clean_value(match.group(1), limit)
+                if value and value not in {"甲方", "乙方", "章"}:
+                    return value
+                for next_line in lines[index + 1:]:
+                    next_value = _clean_value(next_line, limit)
+                    if next_value:
+                        return next_value
     for label in labels:
-        match = re.search(rf"{re.escape(label)}(?:[（(][^）)]*[）)])?\s*[:：]?\s*([^\n\r;；]{{1,{limit}}})", text)
+        match = re.search(rf"{re.escape(label)}\s*(?:[（(][^）)]*[）)])?\s*[:：]?\s*([^\n\r;；]{{1,{limit}}})", text)
         if match:
-            return _clean_value(match.group(1), limit)
+            value = _clean_value(match.group(1), limit)
+            if value not in {"甲方", "乙方", "章"}:
+                return value
     return ""
 
 
 def _extract_contract_no(text: str) -> str:
     text = _normalize_text(text)
-    labeled = _match_after(text, ["合同编号", "合同号", "编号"], 80)
+    match = re.search(r"\b(HT[-_A-Za-z0-9]{4,}|PRJ[-_A-Za-z0-9]{4,})\b", text, re.I)
+    if match:
+        return match.group(1)
+    labeled = _match_after(text, ["合同编号", "合同号"], 80)
     if labeled:
         match = re.search(r"[A-Za-z0-9][A-Za-z0-9\-_]{3,}", labeled)
         return match.group(0) if match else labeled
-    match = re.search(r"\b(HT[-_A-Za-z0-9]{4,}|PRJ[-_A-Za-z0-9]{4,})\b", text, re.I)
-    return match.group(1) if match else ""
+    return ""
 
 
 def _extract_invoice_no(text: str) -> str:
@@ -204,43 +383,72 @@ def _extract_contract(text: str) -> dict:
 
 def _extract_invoice(text: str) -> dict:
     text = _normalize_text(text)
-    # 发票票面常见字段会同时出现“金额、税额、价税合计”，先取最明确的标签，避免把日期或税号当作金额。
-    amount = _extract_amount(text, ["价税合计", "价税合计(小写)", "价税合计（小写）", "合计金额", "发票金额", "开票金额"])
-    amount_without_tax = _extract_amount(text, ["不含税金额", "合计金额(不含税)", "合计金额（不含税）", "金额"])
-    tax_amount = _extract_amount(text, ["合计税额", "税额"])
+    # 发票票面中“金额”列、合同备注和价税合计会同时出现，必须按票据字段优先级取值。
+    amount = _extract_amount_by_labels(
+        text,
+        ["价税合计（小写）", "价税合计(小写)", "价税合计", "发票金额（含税）", "发票金额(含税)", "发票金额"],
+        prefer="max",
+    )
+    tax_amount = _extract_amount_by_labels(text, ["合计税额", "税额"], prefer="first")
+    amount_without_tax = _extract_amount_by_labels(
+        text,
+        ["不含税金额", "合计金额（不含税）", "合计金额(不含税)", "金额"],
+        prefer="first",
+    )
+
+    all_money = _money_values(text)
+    if not amount and all_money:
+        amount = max(all_money, key=Decimal)
+
     tax_rate = ""
-    rate_match = re.search(r"(?:税率|税率/征收率)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%", text)
+    rate_match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
     if rate_match:
         tax_rate = rate_match.group(1)
-    else:
-        if tax_amount and amount_without_tax:
-            try:
-                ta = Decimal(tax_amount)
-                awt = Decimal(amount_without_tax)
-                if awt > 0:
-                    tax_rate = f"{(ta / awt * 100).quantize(Decimal('0.01'))}"
-            except (InvalidOperation, ZeroDivisionError):
-                pass
+        after_rate_values = _money_values(text[rate_match.end(): rate_match.end() + 100])
+        if after_rate_values:
+            tax_amount = after_rate_values[0]
 
     try:
+        amount_decimal = _to_decimal(amount)
+        tax_decimal = _to_decimal(tax_amount)
+        without_tax_decimal = _to_decimal(amount_without_tax)
+
+        if not tax_decimal and tax_rate and without_tax_decimal:
+            tax_decimal = (without_tax_decimal * Decimal(tax_rate) / Decimal("100")).quantize(Decimal("0.01"))
+            tax_amount = f"{tax_decimal}"
+        if not without_tax_decimal and amount_decimal and tax_decimal:
+            without_tax_decimal = (amount_decimal - tax_decimal).quantize(Decimal("0.01"))
+            amount_without_tax = f"{without_tax_decimal}"
+        if not without_tax_decimal and amount_decimal and tax_rate:
+            rate = Decimal(tax_rate) / Decimal("100")
+            without_tax_decimal = (amount_decimal / (Decimal("1") + rate)).quantize(Decimal("0.01"))
+            amount_without_tax = f"{without_tax_decimal}"
+            tax_decimal = (amount_decimal - without_tax_decimal).quantize(Decimal("0.01"))
+            tax_amount = f"{tax_decimal}"
+        if not amount_decimal and without_tax_decimal and tax_decimal:
+            amount_decimal = (without_tax_decimal + tax_decimal).quantize(Decimal("0.01"))
+            amount = f"{amount_decimal}"
         if not amount and amount_without_tax and tax_amount:
             amount = f"{(Decimal(amount_without_tax) + Decimal(tax_amount)).quantize(Decimal('0.01'))}"
-        if not amount_without_tax and amount and tax_amount:
-            amount_without_tax = f"{(Decimal(amount) - Decimal(tax_amount)).quantize(Decimal('0.01'))}"
         if not tax_amount and amount and amount_without_tax:
             tax_amount = f"{(Decimal(amount) - Decimal(amount_without_tax)).quantize(Decimal('0.01'))}"
+        if not tax_rate and tax_amount and amount_without_tax and Decimal(amount_without_tax) > 0:
+            tax_rate = f"{(Decimal(tax_amount) / Decimal(amount_without_tax) * Decimal('100')).quantize(Decimal('0.01'))}"
     except InvalidOperation:
         pass
 
     return {
         "invoice_no": _extract_invoice_no(text),
+        "invoice_code": _match_after(text, ["发票代码"], 80),
         "amount": amount,
         "amount_without_tax": amount_without_tax,
         "tax_rate": tax_rate,
         "tax_amount": tax_amount,
         "invoice_date": _extract_date(text),
-        "buyer": _match_after(text, ["购买方名称", "购买方", "购方", "买方"]),
-        "seller": _match_after(text, ["销售方名称", "销售方", "销方", "卖方"]),
+        "buyer": _extract_invoice_party(text, "buyer"),
+        "seller": _extract_invoice_party(text, "seller"),
+        "project_name": _match_after(text, ["项目名称"], 120),
+        "contract_no": _extract_contract_no(text),
     }
 
 
@@ -248,14 +456,23 @@ def _extract_payment(text: str) -> dict:
     text = _normalize_text(text)
     payer = _match_after(text, ["付款方", "付款人", "付款账户名", "付款单位", "汇款方"])
     payee = _match_after(text, ["收款方", "收款人", "收款账户名", "收款单位"])
-    serial = _match_after(text, ["流水号", "交易流水号", "回单编号", "凭证号"], 80)
+    serial = _match_after(text, ["凭证编号", "流水号", "交易流水号", "回单编号", "凭证号"], 80)
+    if not serial:
+        serial_match = re.search(r"\b[A-Z]{1,8}[-_]\d{4}[-_A-Za-z0-9]{3,}\b", text)
+        serial = serial_match.group(0) if serial_match else ""
+    amount, amount_candidates, amount_warning = _extract_payment_amount(text)
+    invoice_no = _extract_invoice_no(text)
+    remark_parts = [item for item in [serial, payer, payee] if item]
     return {
-        "amount": _extract_amount(text, ["回款金额", "付款金额", "收款金额", "交易金额", "金额", "人民币"]),
+        "amount": amount,
+        "amount_candidates": amount_candidates,
+        "amount_warning": amount_warning,
         "payment_date": _extract_date(text),
         "payer": payer,
         "payee": payee,
         "serial_no": serial,
-        "remark": serial or payer or payee,
+        "invoice_no": invoice_no,
+        "remark": " / ".join(remark_parts),
     }
 
 
@@ -342,6 +559,8 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
         confidence = _confidence_for(info, base_confidence)
         duration = time.perf_counter() - start
         status = "success" if raw_text else "manual_required"
+        if recognition_type == "payment" and raw_text and not info.get("amount"):
+            status = "manual_required"
         log = OcrRecognitionLog(
             file_path=file_path,
             file_name=path.name,
