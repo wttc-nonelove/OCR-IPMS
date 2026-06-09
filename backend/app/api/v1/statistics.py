@@ -1,7 +1,8 @@
-from datetime import date
+from calendar import monthrange
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from fastapi import APIRouter, Depends
@@ -40,6 +41,85 @@ def _money(value) -> float:
 
 def _month_key(day: date) -> str:
     return f"{day.year}-{day.month:02d}"
+
+
+def _year_range(year: int) -> tuple[datetime, datetime, date, date]:
+    start_dt = datetime(year, 1, 1)
+    end_dt = datetime(year + 1, 1, 1)
+    start_day = date(year, 1, 1)
+    end_day = date(year + 1, 1, 1)
+    return start_dt, end_dt, start_day, end_day
+
+
+def _month_range(month: str | None) -> tuple[int, int, date, date]:
+    if month:
+        try:
+            year, month_num = [int(part) for part in month.split("-", 1)]
+        except ValueError:
+            today = date.today()
+            year, month_num = today.year, today.month
+    else:
+        today = date.today()
+        year, month_num = today.year, today.month
+    if month_num < 1 or month_num > 12:
+        today = date.today()
+        year, month_num = today.year, today.month
+    _, days = monthrange(year, month_num)
+    start_day = date(year, month_num, 1)
+    if month_num == 12:
+        end_day = date(year + 1, 1, 1)
+    else:
+        end_day = date(year, month_num + 1, 1)
+    return year, month_num, start_day, end_day
+
+
+def _day_key(day: date) -> str:
+    return f"{day.year}-{day.month:02d}-{day.day:02d}"
+
+
+def _invoice_out(invoice: Invoice) -> dict:
+    project = invoice.project
+    return {
+        "id": invoice.id,
+        "project_id": invoice.project_id,
+        "project_no": project.project_no if project else None,
+        "project_name": project.name if project else None,
+        "invoice_no": invoice.invoice_no,
+        "amount": _money(invoice.amount),
+        "amount_without_tax": _money(invoice.amount_without_tax),
+        "tax_rate": _money(invoice.tax_rate),
+        "tax_amount": _money(invoice.tax_amount),
+        "invoice_date": invoice.invoice_date.isoformat(),
+        "buyer": invoice.buyer,
+        "seller": invoice.seller,
+    }
+
+
+def _payment_out(payment: Payment) -> dict:
+    project = payment.project
+    return {
+        "id": payment.id,
+        "project_id": payment.project_id,
+        "project_no": project.project_no if project else None,
+        "project_name": project.name if project else None,
+        "invoice_no": payment.invoice.invoice_no if payment.invoice else None,
+        "amount": _money(payment.amount),
+        "payment_date": payment.payment_date.isoformat(),
+        "payment_method": payment.payment_method,
+        "voucher_file": payment.voucher_file,
+        "remark": payment.remark,
+    }
+
+
+def _project_keyword_filter(keyword: str):
+    like = f"%{keyword.strip()}%"
+    return or_(
+        Project.project_no.like(like),
+        Project.contract_no.like(like),
+        Project.name.like(like),
+        Project.customer.like(like),
+        Project.party_a.like(like),
+    )
 
 
 def _role_panel(db: Session, user: User) -> dict:
@@ -186,3 +266,72 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
 
     monthly = [{"month": key, "invoice": invoice_map[key], "payment": payment_map[key]} for key in months]
     return ok({"summary": summary, "role_panel": _role_panel(db, user), "lifecycle": lifecycle, "monthly": monthly})
+
+
+@router.get("/report")
+def report(
+    mode: str = "year",
+    year: int | None = None,
+    month: str | None = None,
+    keyword: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    mode = mode if mode in {"year", "month"} else "year"
+    if mode == "month":
+        target_year, target_month, start_day, end_day = _month_range(month)
+        start_dt = datetime.combine(start_day, datetime.min.time())
+        end_dt = datetime.combine(end_day, datetime.min.time())
+        labels = [_day_key(date(target_year, target_month, day)) for day in range(1, monthrange(target_year, target_month)[1] + 1)]
+        range_label = f"{target_year}-{target_month:02d}"
+    else:
+        target_year = year or date.today().year
+        start_dt, end_dt, start_day, end_day = _year_range(target_year)
+        labels = [f"{target_year}-{month_num:02d}" for month_num in range(1, 13)]
+        range_label = str(target_year)
+
+    project_query = db.query(Project).filter(Project.create_time >= start_dt, Project.create_time < end_dt)
+    invoice_query = db.query(Invoice).join(Project).filter(Invoice.invoice_date >= start_day, Invoice.invoice_date < end_day)
+    payment_query = db.query(Payment).join(Project).filter(Payment.payment_date >= start_day, Payment.payment_date < end_day)
+    if keyword and keyword.strip():
+        condition = _project_keyword_filter(keyword)
+        project_query = project_query.filter(condition)
+        invoice_query = invoice_query.filter(condition)
+        payment_query = payment_query.filter(condition)
+
+    total_projects = project_query.count()
+    contract_amount = project_query.with_entities(func.coalesce(func.sum(Project.amount), 0)).scalar() or Decimal("0")
+    invoice_amount = invoice_query.with_entities(func.coalesce(func.sum(Invoice.amount), 0)).scalar() or Decimal("0")
+    payment_amount = payment_query.with_entities(func.coalesce(func.sum(Payment.amount), 0)).scalar() or Decimal("0")
+
+    invoice_map = {key: 0.0 for key in labels}
+    payment_map = {key: 0.0 for key in labels}
+    for invoice in invoice_query.all():
+        key = _day_key(invoice.invoice_date) if mode == "month" else _month_key(invoice.invoice_date)
+        if key in invoice_map:
+            invoice_map[key] += _money(invoice.amount)
+    for payment in payment_query.all():
+        key = _day_key(payment.payment_date) if mode == "month" else _month_key(payment.payment_date)
+        if key in payment_map:
+            payment_map[key] += _money(payment.amount)
+
+    trend = [{"period": key, "month": key, "invoice": invoice_map[key], "payment": payment_map[key]} for key in labels]
+    data = {
+        "mode": mode,
+        "year": target_year,
+        "month": range_label if mode == "month" else None,
+        "range_label": range_label,
+        "summary": {
+            "total_projects": total_projects,
+            "total_contract_amount": _money(contract_amount),
+            "total_invoice_amount": _money(invoice_amount),
+            "total_payment_amount": _money(payment_amount),
+            "total_receivable": _money(invoice_amount - payment_amount),
+        },
+        "monthly": trend,
+        "trend": trend,
+    }
+    if mode == "month":
+        data["invoices"] = [_invoice_out(invoice) for invoice in invoice_query.order_by(Invoice.invoice_date.desc(), Invoice.id.desc()).all()]
+        data["payments"] = [_payment_out(payment) for payment in payment_query.order_by(Payment.payment_date.desc(), Payment.id.desc()).all()]
+    return ok(data)
