@@ -166,14 +166,15 @@
             <span class="status" :class="statusClass(row.status)">{{ statusText(row.status) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="360" fixed="right">
+        <el-table-column label="操作" width="430" fixed="right">
           <template #default="{ row }">
+            <el-button link @click="openProjectDetail(row.id)">查看详情</el-button>
             <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="editDraft(row)">编辑草稿</el-button>
             <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="submit(row.id)">提交审核</el-button>
             <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link @click="approve(row.id, 'approved')">通过</el-button>
             <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link type="danger" @click="approve(row.id, 'rejected')">驳回</el-button>
             <el-button v-if="row.status === 'approved' && auth.user?.role === 'admin'" link @click="start(row.id)">确认开始</el-button>
-            <el-button link @click="selectProject(row.id)">查看差异</el-button>
+            <el-button link @click="openDiffDialog(row.id)">查看差异</el-button>
             <el-button v-if="canDelete(row)" link type="danger" @click="deleteProject(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -190,6 +191,51 @@
         />
       </div>
     </section>
+
+    <el-dialog v-model="detailVisible" title="立项详情" width="860px">
+      <el-skeleton v-if="detailLoading" :rows="6" animated />
+      <template v-else-if="projectDetail">
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="项目编号">{{ projectDetail.project.project_no }}</el-descriptions-item>
+          <el-descriptions-item label="合同编号">{{ projectDetail.project.contract_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="项目名称">{{ projectDetail.project.name }}</el-descriptions-item>
+          <el-descriptions-item label="项目状态">{{ statusText(projectDetail.project.status) }}</el-descriptions-item>
+          <el-descriptions-item label="甲方/客户">{{ projectDetail.project.party_a || projectDetail.project.customer || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="乙方">{{ projectDetail.project.party_b || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="合同金额">{{ money(projectDetail.project.amount) }}</el-descriptions-item>
+          <el-descriptions-item label="签订日期">{{ projectDetail.project.sign_date || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="项目类型">{{ projectDetail.project.project_type || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="尾款状态">{{ projectDetail.project.balance_status || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="项目说明" :span="2">{{ projectDetail.project.description || '-' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <h3 class="dialog-section-title">合同附件</h3>
+        <el-table :data="projectDetail.contracts" empty-text="暂无合同附件">
+          <el-table-column prop="file_name" label="文件名" min-width="180" />
+          <el-table-column prop="file_type" label="类型" width="90" />
+          <el-table-column prop="version" label="版本" width="80" />
+          <el-table-column prop="upload_time" label="上传时间" min-width="160" />
+        </el-table>
+
+        <h3 class="dialog-section-title">审批记录</h3>
+        <el-table :data="projectDetail.approvals" empty-text="暂无审批记录">
+          <el-table-column prop="business_type" label="类型" width="100" />
+          <el-table-column prop="status" label="状态" width="120" />
+          <el-table-column prop="start_time" label="开始时间" />
+        </el-table>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="diffDialogVisible" title="合同差异" width="860px">
+      <el-table :data="detailDiffs" empty-text="暂无合同差异">
+        <el-table-column prop="field_label" label="字段" width="130" />
+        <el-table-column prop="registered_value" label="登记值" />
+        <el-table-column prop="recognized_value" label="识别值" />
+        <el-table-column prop="adopted_value" label="采用值" />
+        <el-table-column prop="diff_status" label="状态" width="110" />
+        <el-table-column prop="remark" label="备注" />
+      </el-table>
+    </el-dialog>
   </section>
 </template>
 
@@ -220,6 +266,11 @@ const pdfUnrecognized = ref<any[]>([])
 const pdfParseStatus = ref('')
 const pdfRawPreview = ref('')
 const suppressAutoSave = ref(false)
+const detailVisible = ref(false)
+const diffDialogVisible = ref(false)
+const detailLoading = ref(false)
+const projectDetail = ref<any>(null)
+const detailDiffs = ref<any[]>([])
 const form = reactive<any>({
   id: null,
   project_no: '',
@@ -370,6 +421,30 @@ async function selectProject(id: number) {
   await loadDiffs()
 }
 
+async function loadProjectDetail(id: number) {
+  detailLoading.value = true
+  try {
+    const res: any = await http.get('/project/detail', { params: { project_id: id } })
+    projectDetail.value = res.data
+    detailDiffs.value = res.data?.diffs || []
+    return res.data
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function openProjectDetail(id: number) {
+  detailVisible.value = true
+  await loadProjectDetail(id)
+}
+
+async function openDiffDialog(id: number) {
+  diffDialogVisible.value = true
+  selectedProjectId.value = id
+  const data = await loadProjectDetail(id)
+  detailDiffs.value = data?.diffs || []
+}
+
 async function loadDiffs() {
   if (!selectedProjectId.value) return
   const res: any = await http.get('/project/diff/list', { params: { project_id: selectedProjectId.value } })
@@ -388,6 +463,7 @@ async function confirmDiff(row: any) {
   })
   ElMessage.success('差异已确认')
   await Promise.all([loadDiffs(), load()])
+  if (projectDetail.value?.project?.id) await loadProjectDetail(projectDetail.value.project.id)
 }
 
 async function submit(id: number) {
@@ -473,7 +549,6 @@ function projectOptionLabel(project: any) {
 }
 
 function canDelete(row: any) {
-  if (row.status === 'closed') return false
   if (auth.user?.role === 'admin') return true
   return auth.user?.role === 'business' && row.status === 'draft'
 }

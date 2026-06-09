@@ -19,6 +19,45 @@ from app.services.ocr import recognize_file
 router = APIRouter(prefix="/invoice", tags=["invoice"])
 
 
+def _normalize_invoice_amounts(
+    amount: Decimal | None,
+    amount_without_tax: Decimal | None,
+    tax_rate: Decimal | None,
+    tax_amount: Decimal | None,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    amount = amount.quantize(Decimal("0.01")) if amount is not None else None
+    amount_without_tax = amount_without_tax.quantize(Decimal("0.01")) if amount_without_tax is not None else None
+    tax_rate = tax_rate.quantize(Decimal("0.01")) if tax_rate is not None else None
+    tax_amount = tax_amount.quantize(Decimal("0.01")) if tax_amount is not None else None
+
+    if amount_without_tax is not None and amount_without_tax > 0:
+        if tax_amount is None:
+            if tax_rate is not None and tax_rate > 0:
+                tax_amount = (amount_without_tax * tax_rate / Decimal("100")).quantize(Decimal("0.01"))
+                amount = (amount_without_tax + tax_amount).quantize(Decimal("0.01"))
+            else:
+                tax_amount = ((amount or amount_without_tax) - amount_without_tax).quantize(Decimal("0.01"))
+    elif tax_amount is not None and tax_amount > 0:
+        if amount is None:
+            raise HTTPException(status_code=400, detail="请填写价税合计或不含税金额")
+        amount_without_tax = (amount - tax_amount).quantize(Decimal("0.01"))
+    else:
+        if amount is None:
+            raise HTTPException(status_code=400, detail="请填写发票金额")
+        amount_without_tax = amount
+        tax_amount = Decimal("0.00")
+
+    if tax_amount is None:
+        tax_amount = Decimal("0.00")
+    if tax_rate is None and amount_without_tax > 0:
+        tax_rate = (tax_amount / amount_without_tax * Decimal("100")).quantize(Decimal("0.01"))
+    if tax_rate is None:
+        tax_rate = Decimal("0.00")
+    if (amount is None or amount <= 0) and amount_without_tax > 0:
+        amount = (amount_without_tax + tax_amount).quantize(Decimal("0.01"))
+    return amount, amount_without_tax, tax_rate, tax_amount
+
+
 @router.get("/list")
 def list_invoices(
     project_id: int | None = None,
@@ -34,15 +73,18 @@ def list_invoices(
         {
             "id": i.id,
             "project_id": i.project_id,
+            "project_no": i.project.project_no if i.project else None,
+            "project_name": i.project.name if i.project else None,
             "invoice_no": i.invoice_no,
-            "amount": float(i.amount),
-            "amount_without_tax": float(i.amount_without_tax),
-            "tax_rate": float(i.tax_rate),
-            "tax_amount": float(i.tax_amount),
+            "amount": float(i.amount or 0),
+            "amount_without_tax": float(i.amount_without_tax or 0),
+            "tax_rate": float(i.tax_rate or 0),
+            "tax_amount": float(i.tax_amount or 0),
             "invoice_date": i.invoice_date.isoformat(),
             "invoice_type": i.invoice_type,
             "buyer": i.buyer,
             "seller": i.seller,
+            "file_path": i.file_path,
             "create_time": i.create_time.isoformat() if i.create_time else None,
         }
         for i in query.order_by(Invoice.create_time.desc()).offset(pg.offset).limit(pg.limit).all()
@@ -54,7 +96,7 @@ def list_invoices(
 async def create_invoice(
     project_id: int = Form(...),
     invoice_no: str = Form(...),
-    amount: Decimal = Form(...),
+    amount: Decimal | None = Form(None),
     amount_without_tax: Decimal | None = Form(None),
     tax_rate: Decimal | None = Form(None),
     tax_amount: Decimal | None = Form(None),
@@ -66,33 +108,24 @@ async def create_invoice(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(FINANCE)),
 ):
-    # 自动计算不含税金额和税额
-    if amount_without_tax is not None and amount_without_tax > 0:
-        # 用户提供了不含税金额
-        if tax_amount is None:
-            tax_amount = amount - amount_without_tax
-    elif tax_amount is not None and tax_amount > 0:
-        # 用户提供了税额，反算不含税金额
-        amount_without_tax = amount - tax_amount
-    else:
-        # 都没提供，默认不含税金额 = 价税合计（兼容旧逻辑）
-        amount_without_tax = amount
-        tax_amount = Decimal("0")
-
-    if tax_rate is None and amount_without_tax > 0:
-        tax_rate = (tax_amount / amount_without_tax * 100).quantize(Decimal("0.01"))
-
-    # 用不含税金额校验
+    amount, amount_without_tax, tax_rate, tax_amount = _normalize_invoice_amounts(amount, amount_without_tax, tax_rate, tax_amount)
     project = validate_invoice_amount(db, project_id, amount_without_tax)
     path = await save_upload(invoice_file, "invoices")
     if path:
         recognize_file(db, path, "invoice")
     invoice = Invoice(
-        project_id=project_id, invoice_no=invoice_no,
-        amount=amount, amount_without_tax=amount_without_tax,
-        tax_rate=tax_rate or Decimal("0"), tax_amount=tax_amount,
-        invoice_date=invoice_date, invoice_type=invoice_type,
-        buyer=buyer, seller=seller, file_path=path, create_by=user.id,
+        project_id=project_id,
+        invoice_no=invoice_no,
+        amount=amount,
+        amount_without_tax=amount_without_tax,
+        tax_rate=tax_rate,
+        tax_amount=tax_amount,
+        invoice_date=invoice_date,
+        invoice_type=invoice_type,
+        buyer=buyer,
+        seller=seller,
+        file_path=path,
+        create_by=user.id,
     )
     db.add(invoice)
     try:

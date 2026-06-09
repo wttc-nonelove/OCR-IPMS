@@ -11,6 +11,7 @@ from app.db.session import Base, SessionLocal, engine
 from app.models import entities  # noqa: F401
 from app.schemas.common import ok
 from app.services.bootstrap import seed_initial_data
+from app.services.schema_compat import ensure_compatible_schema
 
 settings = get_settings()
 
@@ -49,6 +50,7 @@ def _run_alembic_upgrade():
 @app.on_event("startup")
 def startup():
     _run_alembic_upgrade()
+    ensure_compatible_schema(engine)
     db = SessionLocal()
     try:
         seed_initial_data(db)

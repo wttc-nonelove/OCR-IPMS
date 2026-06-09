@@ -239,10 +239,16 @@ def project_options(usage: str | None = None, db: Session = Depends(get_db), use
     query = db.query(Project)
     if usage in ("invoice", "close"):
         query = query.filter(Project.status.in_([PROJECT_APPROVED, PROJECT_ACTIVE]))
+    elif usage == "payment":
+        invoice_project_ids = db.query(Invoice.project_id).distinct()
+        query = query.filter(Project.status.in_([PROJECT_APPROVED, PROJECT_ACTIVE]), Project.id.in_(invoice_project_ids))
     elif usage == "active":
         query = query.filter(Project.status == PROJECT_ACTIVE)
     projects = query.order_by(Project.create_time.desc()).all()
-    return ok([{"id": p.id, "project_no": p.project_no, "contract_no": p.contract_no, "name": p.name, "customer": p.customer, "amount": float(p.amount), "status": p.status} for p in projects])
+    return ok([
+        {"id": p.id, "project_no": p.project_no, "contract_no": p.contract_no, "name": p.name, "customer": p.customer, "party_a": p.party_a, "party_b": p.party_b, "amount": float(p.amount or 0), "status": p.status}
+        for p in projects
+    ])
 
 
 @router.get("/detail")
@@ -256,13 +262,34 @@ def project_detail(project_id: int, db: Session = Depends(get_db), user: User = 
     payments = db.query(Payment).filter(Payment.project_id == project_id).order_by(Payment.create_time.desc()).all()
     closes = db.query(ProjectClose).filter(ProjectClose.project_id == project_id).order_by(ProjectClose.create_time.desc()).all()
     approvals = db.query(ApprovalInstance).filter(ApprovalInstance.business_id.in_([project_id] + [c.id for c in closes])).order_by(ApprovalInstance.start_time.desc()).all()
+    project_data = ProjectOut.model_validate(project).model_dump()
+    project_data.update({
+        "description": project.description,
+        "start_date": project.start_date.isoformat() if project.start_date else None,
+        "end_date": project.end_date.isoformat() if project.end_date else None,
+        "extra_cost": float(project.extra_cost or 0),
+        "cost_desc": project.cost_desc,
+        "create_by": project.create_by,
+    })
     return ok({
-        "project": ProjectOut.model_validate(project).model_dump(),
-        "contracts": [{"id": c.id, "version": c.version, "file_type": c.file_type, "file_name": c.file_name, "upload_time": c.upload_time.isoformat()} for c in contracts],
+        "project": project_data,
+        "contracts": [
+            {"id": c.id, "version": c.version, "file_type": c.file_type, "file_name": c.file_name, "file_path": c.file_path, "file_size": c.file_size, "upload_by": c.upload_by, "upload_time": c.upload_time.isoformat()}
+            for c in contracts
+        ],
         "diffs": [diff_out(d) for d in diffs],
-        "invoices": [{"id": i.id, "invoice_no": i.invoice_no, "amount": float(i.amount), "amount_without_tax": float(i.amount_without_tax), "tax_rate": float(i.tax_rate), "tax_amount": float(i.tax_amount), "invoice_date": i.invoice_date.isoformat(), "invoice_type": i.invoice_type} for i in invoices],
-        "payments": [{"id": p.id, "invoice_id": p.invoice_id, "amount": float(p.amount), "payment_date": p.payment_date.isoformat(), "payment_method": p.payment_method} for p in payments],
-        "closes": [{"id": c.id, "close_time": c.close_time.isoformat(), "status": c.status, "balance_status": c.balance_status} for c in closes],
+        "invoices": [
+            {"id": i.id, "invoice_no": i.invoice_no, "amount": float(i.amount or 0), "amount_without_tax": float(i.amount_without_tax or 0), "tax_rate": float(i.tax_rate or 0), "tax_amount": float(i.tax_amount or 0), "invoice_date": i.invoice_date.isoformat(), "invoice_type": i.invoice_type, "buyer": i.buyer, "seller": i.seller, "file_path": i.file_path}
+            for i in invoices
+        ],
+        "payments": [
+            {"id": p.id, "invoice_id": p.invoice_id, "invoice_no": p.invoice.invoice_no if p.invoice else None, "amount": float(p.amount or 0), "payment_date": p.payment_date.isoformat(), "payment_method": p.payment_method, "voucher_file": p.voucher_file, "remark": p.remark}
+            for p in payments
+        ],
+        "closes": [
+            {"id": c.id, "actual_start": c.actual_start.isoformat() if c.actual_start else None, "close_time": c.close_time.isoformat(), "status": c.status, "balance_status": c.balance_status, "description": c.description, "report_file": c.report_file, "attachment": c.attachment, "create_by": c.create_by, "create_time": c.create_time.isoformat() if c.create_time else None}
+            for c in closes
+        ],
         "receivable": calculate_receivable(db, project_id),
         "approvals": [{"id": a.id, "business_type": a.business_type, "business_id": a.business_id, "status": a.status, "start_time": a.start_time.isoformat()} for a in approvals],
     })
@@ -295,8 +322,6 @@ def delete_project(project_id: int, db: Session = Depends(get_db), user: User = 
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
-    if project.status == PROJECT_CLOSED:
-        raise HTTPException(status_code=400, detail="已结项项目不可删除")
     if user.role == BUSINESS and not (project.status == PROJECT_DRAFT and project.create_by == user.id):
         raise HTTPException(status_code=403, detail="商务只能删除自己创建的草稿项目")
 

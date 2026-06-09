@@ -81,8 +81,9 @@
         <el-table-column prop="title" label="业务标题" />
         <el-table-column prop="node_name" label="节点" />
         <el-table-column prop="start_by" label="申请人" />
-        <el-table-column label="操作" width="160">
+        <el-table-column label="操作" width="220">
           <template #default="{ row }">
+            <el-button link @click="showCloseDetail(row)">查看内容</el-button>
             <el-button link @click="processTask(row.id, 'approved')">通过</el-button>
             <el-button link type="danger" @click="processTask(row.id, 'rejected')">驳回</el-button>
           </template>
@@ -107,14 +108,50 @@
             <span class="status" :class="row.status === 'closed' ? 'ok' : row.status === 'rejected' ? 'danger' : 'warn'">{{ row.status }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160">
+        <el-table-column label="操作" width="220">
           <template #default="{ row }">
+            <el-button link @click="showCloseDetail(row)">查看内容</el-button>
             <el-button v-if="auth.user?.role === 'admin' && row.status === 'closed'" link @click="withdraw(row)">撤回</el-button>
             <el-button link @click="$router.push('/project')">查看项目</el-button>
           </template>
         </el-table-column>
       </el-table>
     </section>
+
+    <el-dialog v-model="detailVisible" title="结项提交内容" width="760px">
+      <el-empty v-if="!closeDetail" description="暂无结项内容" />
+      <template v-else>
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="项目编号">{{ closeDetail.project_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="合同编号">{{ closeDetail.contract_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="项目名称">{{ closeDetail.project_name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="甲方/客户">{{ closeDetail.party_a || closeDetail.customer || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="乙方">{{ closeDetail.party_b || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="合同金额">{{ money(closeDetail.project_amount) }}</el-descriptions-item>
+          <el-descriptions-item label="实际开始">{{ closeDetail.actual_start || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="结项时间">{{ closeDetail.close_time || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="尾款状态">{{ closeDetail.balance_status || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ closeDetail.status || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="验收报告">{{ closeDetail.report_file ? fileName(closeDetail.report_file) : '未上传' }}</el-descriptions-item>
+          <el-descriptions-item label="其他附件">{{ closeDetail.attachment ? fileName(closeDetail.attachment) : '未上传' }}</el-descriptions-item>
+          <el-descriptions-item label="结项说明" :span="2">{{ closeDetail.description || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <div v-if="closeDetail.receivable" class="receivable-grid" style="margin-top: 16px">
+          <div>
+            <span>累计开票</span>
+            <strong>{{ money(closeDetail.receivable.invoiced_amount) }}</strong>
+          </div>
+          <div>
+            <span>累计回款</span>
+            <strong>{{ money(closeDetail.receivable.paid_amount) }}</strong>
+          </div>
+          <div>
+            <span>应收</span>
+            <strong>{{ money(closeDetail.receivable.receivable) }}</strong>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -132,6 +169,8 @@ const reportFile = ref<any>(null)
 const attachmentFile = ref<any>(null)
 const reportFileName = ref('')
 const attachmentFileName = ref('')
+const detailVisible = ref(false)
+const closeDetail = ref<any>(null)
 const form = reactive({ project_id: '', close_time: '', description: '' })
 
 function onReportFile(upload: any) {
@@ -184,6 +223,12 @@ async function processTask(taskId: number, result: 'approved' | 'rejected') {
   await Promise.all([load(), loadProjects()])
 }
 
+function showCloseDetail(row: any) {
+  const detail = row.close_id ? items.value.find((item) => item.id === row.close_id) : row
+  closeDetail.value = detail || row
+  detailVisible.value = true
+}
+
 async function withdraw(row: any) {
   await http.post('/close/withdraw', { project_id: row.project_id, reason: '管理员撤回结项' })
   ElMessage.success('已撤回')
@@ -193,4 +238,12 @@ async function withdraw(row: any) {
 onMounted(async () => {
   await Promise.all([load(), loadProjects()])
 })
+
+function money(value: number) {
+  return `¥${Number(value || 0).toLocaleString('zh-CN')}`
+}
+
+function fileName(path: string) {
+  return path.split(/[\\/]/).pop() || path
+}
 </script>

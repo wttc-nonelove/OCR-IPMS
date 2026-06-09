@@ -29,16 +29,27 @@ def list_closes(
     data = []
     for c in items:
         project = db.query(Project).filter(Project.id == c.project_id).first()
+        receivable = calculate_receivable(db, c.project_id) if project else {}
         data.append(
             {
                 "id": c.id,
                 "project_id": c.project_id,
                 "project_no": project.project_no if project else None,
                 "project_name": project.name if project else None,
+                "contract_no": project.contract_no if project else None,
+                "customer": project.customer if project else None,
+                "party_a": project.party_a if project else None,
+                "party_b": project.party_b if project else None,
+                "project_amount": float(project.amount or 0) if project else 0,
+                "actual_start": c.actual_start.isoformat() if c.actual_start else None,
                 "close_time": c.close_time.isoformat(),
                 "status": c.status,
                 "balance_status": c.balance_status,
                 "description": c.description,
+                "report_file": c.report_file,
+                "attachment": c.attachment,
+                "receivable": receivable,
+                "create_by": c.create_by,
                 "create_time": c.create_time.isoformat() if c.create_time else None,
             }
         )

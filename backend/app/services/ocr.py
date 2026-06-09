@@ -204,19 +204,15 @@ def _extract_contract(text: str) -> dict:
 
 def _extract_invoice(text: str) -> dict:
     text = _normalize_text(text)
-    # 价税合计（发票总金额）
-    amount = _extract_amount(text, ["价税合计", "合计金额", "发票金额", "开票金额"])
-    # 不含税金额（发票上的"金额"栏）
-    amount_without_tax = _extract_amount(text, ["金额"])
-    # 税额
-    tax_amount = _extract_amount(text, ["税额"])
-    # 税率（百分比文本，如 "13%"）
+    # 发票票面常见字段会同时出现“金额、税额、价税合计”，先取最明确的标签，避免把日期或税号当作金额。
+    amount = _extract_amount(text, ["价税合计", "价税合计(小写)", "价税合计（小写）", "合计金额", "发票金额", "开票金额"])
+    amount_without_tax = _extract_amount(text, ["不含税金额", "合计金额(不含税)", "合计金额（不含税）", "金额"])
+    tax_amount = _extract_amount(text, ["合计税额", "税额"])
     tax_rate = ""
-    rate_match = re.search(r"税率?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%", text)
+    rate_match = re.search(r"(?:税率|税率/征收率)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%", text)
     if rate_match:
         tax_rate = rate_match.group(1)
     else:
-        # 尝试从税额和不含税金额反算税率
         if tax_amount and amount_without_tax:
             try:
                 ta = Decimal(tax_amount)
@@ -225,6 +221,16 @@ def _extract_invoice(text: str) -> dict:
                     tax_rate = f"{(ta / awt * 100).quantize(Decimal('0.01'))}"
             except (InvalidOperation, ZeroDivisionError):
                 pass
+
+    try:
+        if not amount and amount_without_tax and tax_amount:
+            amount = f"{(Decimal(amount_without_tax) + Decimal(tax_amount)).quantize(Decimal('0.01'))}"
+        if not amount_without_tax and amount and tax_amount:
+            amount_without_tax = f"{(Decimal(amount) - Decimal(tax_amount)).quantize(Decimal('0.01'))}"
+        if not tax_amount and amount and amount_without_tax:
+            tax_amount = f"{(Decimal(amount) - Decimal(amount_without_tax)).quantize(Decimal('0.01'))}"
+    except InvalidOperation:
+        pass
 
     return {
         "invoice_no": _extract_invoice_no(text),
