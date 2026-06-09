@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
@@ -29,13 +30,26 @@ def logout():
 
 @router.get("/list")
 def list_users(
+    keyword: str | None = Query(None, description="用户名、姓名、部门、手机号、邮箱关键字"),
     role: str | None = None,
+    status: int | None = Query(None, ge=0, le=1, description="用户状态：1启用，0禁用"),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(ADMIN)),
 ):
     query = db.query(User)
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        query = query.filter(or_(
+            User.username.like(like),
+            User.name.like(like),
+            User.dept.like(like),
+            User.phone.like(like),
+            User.email.like(like),
+        ))
     if role:
         query = query.filter(User.role == role)
+    if status is not None:
+        query = query.filter(User.status == status)
     return ok([UserOut.model_validate(u).model_dump() for u in query.order_by(User.id).all()])
 
 

@@ -1,34 +1,99 @@
 <template>
   <section class="page-grid">
     <div class="content-grid">
-      <section class="panel">
+      <section class="panel user-panel">
         <div class="panel-head">
-          <h2>用户管理</h2>
+          <div>
+            <h2>用户管理</h2>
+            <p>维护系统账号、角色与启用状态</p>
+          </div>
           <el-button type="primary" @click="openCreate">新增用户</el-button>
         </div>
-        <el-table :data="users" empty-text="暂无用户">
-          <el-table-column prop="username" label="用户名" width="120" />
-          <el-table-column prop="name" label="姓名" width="100" />
-          <el-table-column label="角色" width="100">
-            <template #default="{ row }">{{ roleText(row.role) }}</template>
-          </el-table-column>
-          <el-table-column prop="dept" label="部门" width="120" />
-          <el-table-column prop="phone" label="手机号" width="130" />
-          <el-table-column prop="email" label="邮箱" min-width="160" />
-          <el-table-column label="状态" width="80">
+
+        <div class="user-stats">
+          <div class="user-stat">
+            <span>总用户</span>
+            <strong>{{ userStats.total }}</strong>
+          </div>
+          <div class="user-stat is-enabled">
+            <span>启用</span>
+            <strong>{{ userStats.enabled }}</strong>
+          </div>
+          <div class="user-stat is-disabled">
+            <span>禁用</span>
+            <strong>{{ userStats.disabled }}</strong>
+          </div>
+          <div v-for="role in roleOptions" :key="role.value" class="user-stat">
+            <span>{{ role.label }}</span>
+            <strong>{{ userStats.roles[role.value] || 0 }}</strong>
+          </div>
+        </div>
+
+        <div class="user-filters">
+          <el-input
+            v-model="userFilters.keyword"
+            clearable
+            placeholder="搜索用户名、姓名、部门、手机号、邮箱"
+            @keyup.enter="loadUsers"
+          />
+          <el-select v-model="userFilters.role" clearable placeholder="全部角色">
+            <el-option v-for="role in roleOptions" :key="role.value" :label="role.label" :value="role.value" />
+          </el-select>
+          <el-select v-model="userFilters.status" clearable placeholder="全部状态">
+            <el-option label="启用" :value="1" />
+            <el-option label="禁用" :value="0" />
+          </el-select>
+          <el-button :loading="loadingUsers" @click="loadUsers">查询</el-button>
+          <el-button @click="resetUserFilters">重置</el-button>
+        </div>
+
+        <el-table
+          v-loading="loadingUsers"
+          :data="users"
+          empty-text="暂无用户"
+          :row-class-name="userRowClass"
+        >
+          <el-table-column prop="username" label="用户名" min-width="120" />
+          <el-table-column prop="name" label="姓名" min-width="100" />
+          <el-table-column label="角色" width="110">
             <template #default="{ row }">
-              <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small">
+              <el-tag :type="roleTagType(row.role)" size="small">{{ roleText(row.role) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="dept" label="部门" min-width="120">
+            <template #default="{ row }">{{ row.dept || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="phone" label="手机号" min-width="130" />
+          <el-table-column prop="email" label="邮箱" min-width="170">
+            <template #default="{ row }">{{ row.email || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 1 ? 'success' : 'info'" effect="light" size="small">
                 {{ row.status === 1 ? '启用' : '禁用' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="200" fixed="right">
+          <el-table-column label="操作" width="230" fixed="right">
             <template #default="{ row }">
               <el-button link @click="openEdit(row)">编辑</el-button>
-              <el-button link :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">
-                {{ row.status === 1 ? '禁用' : '启用' }}
-              </el-button>
-              <el-button link type="danger" @click="deleteUser(row)">删除</el-button>
+              <el-tooltip :disabled="!isSelf(row)" content="不能禁用当前登录账号" placement="top">
+                <span>
+                  <el-button
+                    link
+                    :disabled="isSelf(row)"
+                    :type="row.status === 1 ? 'warning' : 'success'"
+                    @click="toggleStatus(row)"
+                  >
+                    {{ row.status === 1 ? '禁用' : '启用' }}
+                  </el-button>
+                </span>
+              </el-tooltip>
+              <el-tooltip :disabled="!isSelf(row)" content="不能删除当前登录账号" placement="top">
+                <span>
+                  <el-button link type="danger" :disabled="isSelf(row)" @click="deleteUser(row)">删除</el-button>
+                </span>
+              </el-tooltip>
             </template>
           </el-table-column>
         </el-table>
@@ -108,39 +173,43 @@
       </section>
     </div>
 
-    <!-- 新增/编辑用户对话框 -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '新增用户'" width="500px" destroy-on-close>
-      <el-form :model="userForm" label-width="80px">
-        <el-form-item label="用户名" required>
-          <el-input v-model="userForm.username" :disabled="isEdit" placeholder="请输入用户名" />
+    <el-dialog
+      v-model="dialogVisible"
+      :title="isEdit ? '编辑用户' : '新增用户'"
+      width="560px"
+      destroy-on-close
+      @closed="resetUserForm"
+    >
+      <el-form ref="userFormRef" :model="userForm" :rules="userRules" label-width="88px">
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model.trim="userForm.username" :disabled="isEdit" placeholder="3-50位字母、数字或下划线" />
         </el-form-item>
-        <el-form-item v-if="!isEdit" label="密码" required>
-          <el-input v-model="userForm.password" type="password" show-password placeholder="请输入密码" />
+        <el-form-item v-if="!isEdit" label="密码" prop="password">
+          <el-input v-model="userForm.password" type="password" show-password placeholder="至少6位" />
         </el-form-item>
-        <el-form-item label="姓名" required>
-          <el-input v-model="userForm.name" placeholder="请输入姓名" />
+        <el-form-item label="姓名" prop="name">
+          <el-input v-model.trim="userForm.name" placeholder="请输入姓名" />
         </el-form-item>
-        <el-form-item label="手机号" required>
-          <el-input v-model="userForm.phone" placeholder="请输入手机号" />
-        </el-form-item>
-        <el-form-item label="邮箱">
-          <el-input v-model="userForm.email" placeholder="请输入邮箱" />
-        </el-form-item>
-        <el-form-item label="角色" required>
+        <el-form-item label="角色" prop="role">
           <el-select v-model="userForm.role" placeholder="选择角色" style="width: 100%">
-            <el-option label="管理员" value="admin" />
-            <el-option label="商务" value="business" />
-            <el-option label="财务" value="finance" />
-            <el-option label="项目经理" value="pm" />
+            <el-option v-for="role in roleOptions" :key="role.value" :label="role.label" :value="role.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="部门">
-          <el-input v-model="userForm.dept" placeholder="请输入部门" />
+        <el-form-item label="部门" prop="dept">
+          <el-input v-model.trim="userForm.dept" placeholder="请输入部门" />
+        </el-form-item>
+        <el-form-item label="手机号" prop="phone">
+          <el-input v-model.trim="userForm.phone" placeholder="请输入手机号" />
+        </el-form-item>
+        <el-form-item label="邮箱" prop="email">
+          <el-input v-model.trim="userForm.email" placeholder="请输入邮箱" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitUser">确定</el-button>
+        <el-button type="primary" :loading="saving" @click="submitUser">
+          {{ isEdit ? '保存修改' : '创建用户' }}
+        </el-button>
       </template>
     </el-dialog>
   </section>
@@ -149,9 +218,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
 import { http } from '../api/http'
-import { roleNames, type Role } from '../stores/auth'
+import { roleNames, type Role, useAuthStore } from '../stores/auth'
 
+const authStore = useAuthStore()
 const users = ref<any[]>([])
 const dicts = ref<any[]>([])
 const templates = ref<any[]>([])
@@ -159,19 +230,91 @@ const logs = ref<any[]>([])
 const ocrLogs = ref<any[]>([])
 const ocrHealth = ref<any>(null)
 
-// 用户表单
+const roleOptions: Array<{ label: string; value: Role }> = [
+  { label: '管理员', value: 'admin' },
+  { label: '商务', value: 'business' },
+  { label: '财务', value: 'finance' },
+  { label: '项目经理', value: 'pm' },
+]
+
+const userFilters = reactive<{ keyword: string; role: Role | ''; status: number | '' }>({
+  keyword: '',
+  role: '',
+  status: '',
+})
+
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const saving = ref(false)
+const loadingUsers = ref(false)
 const editingUserId = ref<number | null>(null)
+const userFormRef = ref<FormInstance>()
 const userForm = reactive({
   username: '',
   password: '',
   name: '',
   phone: '',
   email: '',
-  role: '',
+  role: '' as Role | '',
   dept: '',
+})
+
+const userRules = computed<FormRules>(() => ({
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { pattern: /^[A-Za-z0-9_]{3,50}$/, message: '用户名需为3-50位字母、数字或下划线', trigger: 'blur' },
+  ],
+  password: [
+    {
+      validator: (_rule, value, callback) => {
+        if (isEdit.value) {
+          callback()
+          return
+        }
+        if (!value) {
+          callback(new Error('请输入密码'))
+          return
+        }
+        if (String(value).length < 6) {
+          callback(new Error('密码至少6位'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
+  role: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { pattern: /^[0-9+\-\s]{6,20}$/, message: '手机号格式不正确', trigger: 'blur' },
+  ],
+  email: [
+    {
+      validator: (_rule, value, callback) => {
+        if (!value || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(value))) {
+          callback()
+          return
+        }
+        callback(new Error('邮箱格式不正确'))
+      },
+      trigger: 'blur',
+    },
+  ],
+}))
+
+const userStats = computed(() => {
+  const roles: Record<string, number> = {}
+  users.value.forEach((item) => {
+    roles[item.role] = (roles[item.role] || 0) + 1
+  })
+  return {
+    total: users.value.length,
+    enabled: users.value.filter((item) => item.status === 1).length,
+    disabled: users.value.filter((item) => item.status !== 1).length,
+    roles,
+  }
 })
 
 const dictGroups = computed(() => {
@@ -209,15 +352,31 @@ function roleText(role: Role) {
   return roleNames[role] || role
 }
 
+function roleTagType(role: Role) {
+  return ({ admin: 'danger', business: 'primary', finance: 'success', pm: 'warning' } as Record<Role, string>)[role] || 'info'
+}
+
 function businessTypeText(type: string) {
   return ({ project: '立项审批', invoice: '开票审批', close: '结项审批' } as Record<string, string>)[type] || type
 }
 
-// 用户管理
-function openCreate() {
-  isEdit.value = false
+function isSelf(row: any) {
+  return row.id === authStore.user?.id
+}
+
+function userRowClass({ row }: { row: any }) {
+  return row.status === 1 ? '' : 'disabled-user-row'
+}
+
+function resetUserForm() {
   editingUserId.value = null
   Object.assign(userForm, { username: '', password: '', name: '', phone: '', email: '', role: '', dept: '' })
+  userFormRef.value?.clearValidate()
+}
+
+function openCreate() {
+  isEdit.value = false
+  resetUserForm()
   dialogVisible.value = true
 }
 
@@ -237,14 +396,9 @@ function openEdit(row: any) {
 }
 
 async function submitUser() {
-  if (!userForm.username || !userForm.name || !userForm.phone || !userForm.role) {
-    ElMessage.warning('请填写必填项')
-    return
-  }
-  if (!isEdit.value && !userForm.password) {
-    ElMessage.warning('请输入密码')
-    return
-  }
+  if (!userFormRef.value) return
+  const valid = await userFormRef.value.validate().catch(() => false)
+  if (!valid) return
   saving.value = true
   try {
     if (isEdit.value) {
@@ -277,9 +431,13 @@ async function submitUser() {
 }
 
 async function toggleStatus(row: any) {
+  if (isSelf(row)) {
+    ElMessage.warning('不能禁用当前登录账号')
+    return
+  }
   const action = row.status === 1 ? '禁用' : '启用'
   try {
-    await ElMessageBox.confirm(`确认${action}用户 ${row.name}？`, '提示', { type: 'warning' })
+    await ElMessageBox.confirm(`确认${action}用户 ${row.name || row.username}？`, '提示', { type: 'warning' })
   } catch { return }
   await http.put(`/user/${row.id}/status`)
   ElMessage.success(`已${action}`)
@@ -287,8 +445,16 @@ async function toggleStatus(row: any) {
 }
 
 async function deleteUser(row: any) {
+  if (isSelf(row)) {
+    ElMessage.warning('不能删除当前登录账号')
+    return
+  }
   try {
-    await ElMessageBox.confirm(`确认删除用户 ${row.name}？此操作不可恢复。`, '删除用户', { type: 'error', confirmButtonText: '删除' })
+    await ElMessageBox.confirm(`确认删除用户 ${row.name || row.username}？此操作不可恢复。`, '删除用户', {
+      type: 'error',
+      confirmButtonText: '删除',
+      confirmButtonClass: 'el-button--danger',
+    })
   } catch { return }
   await http.delete(`/user/${row.id}`)
   ElMessage.success('用户已删除')
@@ -296,8 +462,24 @@ async function deleteUser(row: any) {
 }
 
 async function loadUsers() {
-  const res: any = await http.get('/user/list')
-  users.value = res.data
+  loadingUsers.value = true
+  try {
+    const res: any = await http.get('/user/list', {
+      params: {
+        keyword: userFilters.keyword || undefined,
+        role: userFilters.role || undefined,
+        status: userFilters.status === '' ? undefined : userFilters.status,
+      },
+    })
+    users.value = res.data
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
+async function resetUserFilters() {
+  Object.assign(userFilters, { keyword: '', role: '', status: '' })
+  await loadUsers()
 }
 
 async function load() {
@@ -319,3 +501,77 @@ onMounted(async () => {
   await Promise.all([loadUsers(), load()])
 })
 </script>
+
+<style scoped>
+.user-panel {
+  min-width: 0;
+}
+
+.user-stats {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(86px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.user-stat {
+  min-height: 68px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.user-stat span,
+.user-stat strong {
+  display: block;
+}
+
+.user-stat span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.user-stat strong {
+  margin-top: 8px;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.user-stat.is-enabled {
+  background: var(--green-soft);
+}
+
+.user-stat.is-disabled {
+  background: #f1f5f9;
+}
+
+.user-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 140px 140px auto auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+:deep(.disabled-user-row) {
+  color: #8a94a6;
+  background: #f8fafc;
+}
+
+@media (max-width: 1180px) {
+  .user-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .user-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .user-stats,
+  .user-filters {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
