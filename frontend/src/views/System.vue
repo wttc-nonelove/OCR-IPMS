@@ -4,18 +4,31 @@
       <section class="panel">
         <div class="panel-head">
           <h2>用户管理</h2>
-          <el-button type="primary" disabled>新增用户</el-button>
+          <el-button type="primary" @click="openCreate">新增用户</el-button>
         </div>
         <el-table :data="users" empty-text="暂无用户">
-          <el-table-column prop="username" label="用户名" />
-          <el-table-column prop="name" label="姓名" />
-          <el-table-column label="角色">
+          <el-table-column prop="username" label="用户名" width="120" />
+          <el-table-column prop="name" label="姓名" width="100" />
+          <el-table-column label="角色" width="100">
             <template #default="{ row }">{{ roleText(row.role) }}</template>
           </el-table-column>
-          <el-table-column prop="dept" label="部门" />
-          <el-table-column label="状态">
+          <el-table-column prop="dept" label="部门" width="120" />
+          <el-table-column prop="phone" label="手机号" width="130" />
+          <el-table-column prop="email" label="邮箱" min-width="160" />
+          <el-table-column label="状态" width="80">
             <template #default="{ row }">
-              <span class="status" :class="row.status === 1 ? 'ok' : 'muted'">{{ row.status === 1 ? '启用' : '禁用' }}</span>
+              <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small">
+                {{ row.status === 1 ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="200" fixed="right">
+            <template #default="{ row }">
+              <el-button link @click="openEdit(row)">编辑</el-button>
+              <el-button link :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">
+                {{ row.status === 1 ? '禁用' : '启用' }}
+              </el-button>
+              <el-button link type="danger" @click="deleteUser(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -94,11 +107,48 @@
         </el-table>
       </section>
     </div>
+
+    <!-- 新增/编辑用户对话框 -->
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '新增用户'" width="500px" destroy-on-close>
+      <el-form :model="userForm" label-width="80px">
+        <el-form-item label="用户名" required>
+          <el-input v-model="userForm.username" :disabled="isEdit" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item v-if="!isEdit" label="密码" required>
+          <el-input v-model="userForm.password" type="password" show-password placeholder="请输入密码" />
+        </el-form-item>
+        <el-form-item label="姓名" required>
+          <el-input v-model="userForm.name" placeholder="请输入姓名" />
+        </el-form-item>
+        <el-form-item label="手机号" required>
+          <el-input v-model="userForm.phone" placeholder="请输入手机号" />
+        </el-form-item>
+        <el-form-item label="邮箱">
+          <el-input v-model="userForm.email" placeholder="请输入邮箱" />
+        </el-form-item>
+        <el-form-item label="角色" required>
+          <el-select v-model="userForm.role" placeholder="选择角色" style="width: 100%">
+            <el-option label="管理员" value="admin" />
+            <el-option label="商务" value="business" />
+            <el-option label="财务" value="finance" />
+            <el-option label="项目经理" value="pm" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="部门">
+          <el-input v-model="userForm.dept" placeholder="请输入部门" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitUser">确定</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { http } from '../api/http'
 import { roleNames, type Role } from '../stores/auth'
 
@@ -108,6 +158,21 @@ const templates = ref<any[]>([])
 const logs = ref<any[]>([])
 const ocrLogs = ref<any[]>([])
 const ocrHealth = ref<any>(null)
+
+// 用户表单
+const dialogVisible = ref(false)
+const isEdit = ref(false)
+const saving = ref(false)
+const editingUserId = ref<number | null>(null)
+const userForm = reactive({
+  username: '',
+  password: '',
+  name: '',
+  phone: '',
+  email: '',
+  role: '',
+  dept: '',
+})
 
 const dictGroups = computed(() => {
   const groups: Record<string, string[]> = {}
@@ -148,16 +213,101 @@ function businessTypeText(type: string) {
   return ({ project: '立项审批', invoice: '开票审批', close: '结项审批' } as Record<string, string>)[type] || type
 }
 
+// 用户管理
+function openCreate() {
+  isEdit.value = false
+  editingUserId.value = null
+  Object.assign(userForm, { username: '', password: '', name: '', phone: '', email: '', role: '', dept: '' })
+  dialogVisible.value = true
+}
+
+function openEdit(row: any) {
+  isEdit.value = true
+  editingUserId.value = row.id
+  Object.assign(userForm, {
+    username: row.username,
+    password: '',
+    name: row.name || '',
+    phone: row.phone || '',
+    email: row.email || '',
+    role: row.role || '',
+    dept: row.dept || '',
+  })
+  dialogVisible.value = true
+}
+
+async function submitUser() {
+  if (!userForm.username || !userForm.name || !userForm.phone || !userForm.role) {
+    ElMessage.warning('请填写必填项')
+    return
+  }
+  if (!isEdit.value && !userForm.password) {
+    ElMessage.warning('请输入密码')
+    return
+  }
+  saving.value = true
+  try {
+    if (isEdit.value) {
+      await http.put('/user/update', {
+        user_id: editingUserId.value,
+        name: userForm.name,
+        phone: userForm.phone,
+        email: userForm.email || undefined,
+        role: userForm.role,
+        dept: userForm.dept || undefined,
+      })
+      ElMessage.success('用户更新成功')
+    } else {
+      await http.post('/user/create', {
+        username: userForm.username,
+        password: userForm.password,
+        name: userForm.name,
+        phone: userForm.phone,
+        email: userForm.email || undefined,
+        role: userForm.role,
+        dept: userForm.dept || undefined,
+      })
+      ElMessage.success('用户创建成功')
+    }
+    dialogVisible.value = false
+    await loadUsers()
+  } finally {
+    saving.value = false
+  }
+}
+
+async function toggleStatus(row: any) {
+  const action = row.status === 1 ? '禁用' : '启用'
+  try {
+    await ElMessageBox.confirm(`确认${action}用户 ${row.name}？`, '提示', { type: 'warning' })
+  } catch { return }
+  await http.put(`/user/${row.id}/status`)
+  ElMessage.success(`已${action}`)
+  await loadUsers()
+}
+
+async function deleteUser(row: any) {
+  try {
+    await ElMessageBox.confirm(`确认删除用户 ${row.name}？此操作不可恢复。`, '删除用户', { type: 'error', confirmButtonText: '删除' })
+  } catch { return }
+  await http.delete(`/user/${row.id}`)
+  ElMessage.success('用户已删除')
+  await loadUsers()
+}
+
+async function loadUsers() {
+  const res: any = await http.get('/user/list')
+  users.value = res.data
+}
+
 async function load() {
-  const [userRes, dictRes, templateRes, logRes, ocrRes, healthRes]: any[] = await Promise.all([
-    http.get('/user/list'),
+  const [dictRes, templateRes, logRes, ocrRes, healthRes]: any[] = await Promise.all([
     http.get('/system/dicts'),
     http.get('/approval/template/list'),
     http.get('/system/logs'),
     http.get('/system/ocr-logs'),
     http.get('/system/ocr-health')
   ])
-  users.value = userRes.data
   dicts.value = dictRes.data
   templates.value = templateRes.data
   logs.value = logRes.data.items
@@ -165,5 +315,7 @@ async function load() {
   ocrHealth.value = healthRes.data
 }
 
-onMounted(load)
+onMounted(async () => {
+  await Promise.all([loadUsers(), load()])
+})
 </script>
