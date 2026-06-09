@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from fastapi import APIRouter, Depends
 
@@ -19,9 +20,10 @@ def finance_summary(project_id: int, db: Session = Depends(get_db), user: User =
     receivable = calculate_receivable(db, project_id)
     contract_amount = float(project.amount or 0)
     invoiced = receivable["invoiced_amount"]
+    invoiced_without_tax = float(db.query(func.coalesce(func.sum(Invoice.amount_without_tax), 0)).filter(Invoice.project_id == project_id).scalar() or 0)
     paid = receivable["paid_amount"]
-    remaining_invoice = max(contract_amount - invoiced, 0) if contract_amount > 0 else 0
-    invoice_progress = round(invoiced / contract_amount * 100, 2) if contract_amount > 0 else 0
+    remaining_invoice = max(contract_amount - invoiced_without_tax, 0) if contract_amount > 0 else 0
+    invoice_progress = round(invoiced_without_tax / contract_amount * 100, 2) if contract_amount > 0 else 0
     payment_progress = round(paid / invoiced * 100, 2) if invoiced > 0 else 0
     invoices = db.query(Invoice).filter(Invoice.project_id == project_id).order_by(Invoice.create_time.desc()).all()
     payments = db.query(Payment).filter(Payment.project_id == project_id).order_by(Payment.create_time.desc()).all()
@@ -32,14 +34,18 @@ def finance_summary(project_id: int, db: Session = Depends(get_db), user: User =
             "project_name": project.name,
             "contract_amount": contract_amount,
             "invoiced_amount": invoiced,
+            "invoiced_without_tax_amount": invoiced_without_tax,
             "paid_amount": paid,
             "receivable": receivable["receivable"],
+            "unpaid_amount": receivable["unpaid_amount"],
+            "is_payment_complete": receivable["is_payment_complete"],
+            "payment_status_label": receivable["payment_status_label"],
             "remaining_invoice_amount": remaining_invoice,
             "invoice_progress": invoice_progress,
             "payment_progress": payment_progress,
             "balance_status": receivable["balance_status"],
             "invoices": [
-                {"id": i.id, "invoice_no": i.invoice_no, "amount": float(i.amount), "invoice_date": i.invoice_date.isoformat(), "invoice_type": i.invoice_type}
+                {"id": i.id, "invoice_no": i.invoice_no, "amount": float(i.amount), "amount_without_tax": float(i.amount_without_tax or 0), "tax_rate": float(i.tax_rate or 0), "tax_amount": float(i.tax_amount or 0), "invoice_date": i.invoice_date.isoformat(), "invoice_type": i.invoice_type}
                 for i in invoices
             ],
             "payments": [

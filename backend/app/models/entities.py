@@ -146,7 +146,10 @@ class Invoice(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("project_info.id", ondelete="CASCADE"), index=True)
     invoice_no: Mapped[str] = mapped_column(String(50), unique=True)
-    amount: Mapped[Decimal] = mapped_column(Numeric(15, 2))
+    amount: Mapped[Decimal] = mapped_column(Numeric(15, 2))  # 价税合计
+    amount_without_tax: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=0)  # 不含税金额
+    tax_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)  # 税率（如 13.00 = 13%）
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=0)  # 税额
     invoice_date: Mapped[date] = mapped_column(Date, index=True)
     invoice_type: Mapped[str] = mapped_column(String(20))
     buyer: Mapped[str | None] = mapped_column(String(200))

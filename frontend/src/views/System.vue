@@ -160,8 +160,8 @@ async function load() {
   users.value = userRes.data
   dicts.value = dictRes.data
   templates.value = templateRes.data
-  logs.value = logRes.data
-  ocrLogs.value = ocrRes.data
+  logs.value = logRes.data.items
+  ocrLogs.value = ocrRes.data.items
   ocrHealth.value = healthRes.data
 }
 

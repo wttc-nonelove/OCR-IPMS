@@ -13,7 +13,7 @@ export const roleNames: Record<Role, string> = {
 export const roleRoutes: Record<Role, string[]> = {
   admin: ['dashboard', 'project', 'invoice', 'close', 'report', 'system'],
   business: ['dashboard', 'project', 'report'],
-  finance: ['dashboard', 'invoice', 'close', 'report'],
+  finance: ['dashboard', 'project', 'invoice', 'close', 'report'],
   pm: ['dashboard', 'project', 'close', 'report']
 }
 

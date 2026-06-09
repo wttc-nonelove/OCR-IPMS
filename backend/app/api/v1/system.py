@@ -4,11 +4,11 @@ import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import Pagination, get_current_user, get_pagination
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.entities import DictItem, OcrRecognitionLog, SysLog, User
-from app.schemas.common import ok
+from app.schemas.common import ok, paginated
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -35,10 +35,11 @@ def list_dicts(dict_type: str | None = None, db: Session = Depends(get_db), user
 
 
 @router.get("/logs")
-def list_logs(limit: int = 50, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    limit = max(1, min(limit, 200))
-    logs = db.query(SysLog).order_by(SysLog.create_time.desc()).limit(limit).all()
-    return ok(
+def list_logs(pg: Pagination = Depends(get_pagination), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    query = db.query(SysLog)
+    total = query.count()
+    logs = query.order_by(SysLog.create_time.desc()).offset(pg.offset).limit(pg.limit).all()
+    return paginated(
         [
             {
                 "id": log.id,
@@ -48,15 +49,17 @@ def list_logs(limit: int = 50, db: Session = Depends(get_db), user: User = Depen
                 "create_time": log.create_time.isoformat() if log.create_time else None,
             }
             for log in logs
-        ]
+        ],
+        total, pg.page, pg.page_size,
     )
 
 
 @router.get("/ocr-logs")
-def list_ocr_logs(limit: int = 50, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    limit = max(1, min(limit, 200))
-    logs = db.query(OcrRecognitionLog).order_by(OcrRecognitionLog.create_time.desc()).limit(limit).all()
-    return ok(
+def list_ocr_logs(pg: Pagination = Depends(get_pagination), db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    query = db.query(OcrRecognitionLog)
+    total = query.count()
+    logs = query.order_by(OcrRecognitionLog.create_time.desc()).offset(pg.offset).limit(pg.limit).all()
+    return paginated(
         [
             {
                 "id": log.id,
@@ -70,7 +73,8 @@ def list_ocr_logs(limit: int = 50, db: Session = Depends(get_db), user: User = D
                 "create_time": log.create_time.isoformat() if log.create_time else None,
             }
             for log in logs
-        ]
+        ],
+        total, pg.page, pg.page_size,
     )
 
 

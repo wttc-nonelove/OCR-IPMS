@@ -72,6 +72,7 @@
         />
         <div class="form-actions">
           <el-button :disabled="!task?.task_id" @click="checkStatus">刷新状态</el-button>
+          <el-button v-if="task?.status === 'finished'" type="success" @click="downloadExport">下载文件</el-button>
           <el-button type="primary" @click="exportFile">开始导出</el-button>
         </div>
       </section>
@@ -81,6 +82,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { http } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 
@@ -122,12 +124,26 @@ async function load() {
 async function exportFile() {
   const res: any = await http.post('/export/batch', { export_types: exportTypes.value, format: 'excel' })
   task.value = res.data
+  ElMessage.success('导出任务已创建，请稍后刷新状态')
 }
 
 async function checkStatus() {
   if (!task.value?.task_id) return
   const res: any = await http.get('/export/status', { params: { task_id: task.value.task_id } })
   task.value = res.data
+}
+
+async function downloadExport() {
+  if (!task.value?.task_id) return
+  const blob: any = await http.get('/export/download', { params: { task_id: task.value.task_id }, responseType: 'blob' })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = task.value.file_name || `${task.value.task_id}.xlsx`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
 }
 
 onMounted(load)
