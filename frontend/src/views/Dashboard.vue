@@ -1,37 +1,28 @@
 <template>
   <section class="page-grid">
-    <!-- Metric Cards with Skeleton -->
     <div class="metric-grid">
-      <template v-if="loading">
-        <article v-for="i in 4" :key="i" class="metric-card">
-          <el-skeleton :rows="2" animated />
-        </article>
-      </template>
-      <template v-else>
-        <article class="metric-card">
-          <span>项目总数</span>
-          <strong>{{ summary.total_projects }}</strong>
-          <small>统一编号 PRJ-YYYY-NNNN</small>
-        </article>
-        <article class="metric-card">
-          <span>进行中项目</span>
-          <strong>{{ summary.active_projects }}</strong>
-          <small>管理员确认后进入进行中</small>
-        </article>
-        <article class="metric-card">
-          <span>累计开票金额</span>
-          <strong>{{ money(summary.total_invoice_amount) }}</strong>
-          <small>已结项项目不可再开票</small>
-        </article>
-        <article class="metric-card">
-          <span>累计回款金额</span>
-          <strong>{{ money(summary.total_payment_amount) }}</strong>
-          <small>回款绑定单张发票</small>
-        </article>
-      </template>
+      <article class="metric-card">
+        <span>项目总数</span>
+        <strong>{{ summary.total_projects }}</strong>
+        <small>统一编号 PRJ-YYYY-NNNN</small>
+      </article>
+      <article class="metric-card">
+        <span>进行中项目</span>
+        <strong>{{ summary.active_projects }}</strong>
+        <small>管理员确认后进入进行中</small>
+      </article>
+      <article class="metric-card">
+        <span>累计开票金额</span>
+        <strong>{{ money(summary.total_invoice_amount) }}</strong>
+        <small>已结项项目不可再开票</small>
+      </article>
+      <article class="metric-card">
+        <span>累计回款金额</span>
+        <strong>{{ money(summary.total_payment_amount) }}</strong>
+        <small>回款绑定单张发票</small>
+      </article>
     </div>
 
-    <!-- Role Panel with Skeleton -->
     <section class="panel">
       <div class="panel-head">
         <div>
@@ -41,8 +32,7 @@
         <span class="badge">{{ rolePanel.badge || '真实数据' }}</span>
       </div>
 
-      <el-skeleton v-if="loading" :rows="4" animated />
-      <article v-else class="role-panel active">
+      <article class="role-panel active">
         <div class="role-panel-head">
           <div>
             <span class="role-label">{{ roleLabel }}</span>
@@ -68,7 +58,6 @@
       </article>
     </section>
 
-    <!-- Lifecycle & Todos with Skeleton -->
     <div class="content-grid dashboard-grid">
       <section class="panel">
         <div class="panel-head">
@@ -78,8 +67,7 @@
           </div>
           <span class="badge info">闭环流程</span>
         </div>
-        <el-skeleton v-if="loading" :rows="3" animated />
-        <div v-else class="lifecycle">
+        <div class="lifecycle">
           <div v-for="step in lifecycleSteps" :key="step.key" class="life-step" :class="step.className">
             <span>{{ step.no }}</span>
             <strong>{{ step.label }}</strong>
@@ -93,41 +81,34 @@
           <h2>待办事项</h2>
           <span class="badge danger">{{ rolePanel.todos?.length || 0 }}</span>
         </div>
-        <el-skeleton v-if="loading" :rows="3" animated />
-        <template v-else>
-          <el-empty v-if="!rolePanel.todos?.length" description="暂无待办事项" />
-          <div v-else class="todo-list">
-            <button v-for="todo in rolePanel.todos" :key="todo.title" class="todo-item" type="button" @click="$router.push(todo.path)">
-              <span class="dot" :class="todo.level"></span>
-              <div>
-                <strong>{{ todo.title }}</strong>
-                <small>{{ todo.desc }}</small>
-              </div>
-            </button>
-          </div>
-        </template>
+        <el-empty v-if="!rolePanel.todos?.length" description="暂无待办事项" />
+        <div v-else class="todo-list">
+          <button v-for="todo in rolePanel.todos" :key="todo.title" class="todo-item" type="button" @click="$router.push(todo.path)">
+            <span class="dot" :class="todo.level"></span>
+            <div>
+              <strong>{{ todo.title }}</strong>
+              <small>{{ todo.desc }}</small>
+            </div>
+          </button>
+        </div>
       </section>
     </div>
 
-    <!-- Charts & Quick Actions with Skeleton -->
     <div class="content-grid">
       <section class="panel">
         <div class="panel-head">
           <h2>月度开票 / 回款</h2>
         </div>
-        <el-skeleton v-if="loading" :rows="4" animated />
-        <template v-else>
-          <el-empty v-if="!monthly.length" description="暂无月度数据" />
-          <div v-else class="bar-chart" aria-label="月度开票回款柱状图">
-            <div v-for="item in monthlyBars" :key="item.month" :style="item.style">
-              <span>{{ item.label }}</span>
-            </div>
+        <el-empty v-if="!monthly.length" description="暂无月度数据" />
+        <div v-else class="bar-chart" aria-label="月度开票回款柱状图">
+          <div v-for="item in monthlyBars" :key="item.month" :style="item.style">
+            <span>{{ item.label }}</span>
           </div>
-          <div class="legend">
-            <span><i class="legend-invoice"></i>开票</span>
-            <span><i class="legend-payment"></i>回款</span>
-          </div>
-        </template>
+        </div>
+        <div class="legend">
+          <span><i class="legend-invoice"></i>开票</span>
+          <span><i class="legend-payment"></i>回款</span>
+        </div>
       </section>
 
       <section class="panel">
@@ -151,7 +132,6 @@ import { http } from '../api/http'
 import { roleNames, useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
-const loading = ref(true)
 const summary = reactive({ total_projects: 0, active_projects: 0, total_invoice_amount: 0, total_payment_amount: 0 })
 const lifecycle = reactive<Record<string, number>>({ draft: 0, pending: 0, approved: 0, active: 0, closed: 0 })
 const rolePanel = reactive<any>({ stats: [], tasks: [], actions: [], todos: [] })
@@ -183,14 +163,10 @@ function displayValue(value: string | number) {
 }
 
 onMounted(async () => {
-  try {
-    const res: any = await http.get('/statistics/dashboard')
-    Object.assign(summary, res.data.summary || {})
-    Object.assign(lifecycle, res.data.lifecycle || {})
-    Object.assign(rolePanel, res.data.role_panel || {})
-    monthly.value = res.data.monthly || []
-  } finally {
-    loading.value = false
-  }
+  const res: any = await http.get('/statistics/dashboard')
+  Object.assign(summary, res.data.summary || {})
+  Object.assign(lifecycle, res.data.lifecycle || {})
+  Object.assign(rolePanel, res.data.role_panel || {})
+  monthly.value = res.data.monthly || []
 })
 </script>

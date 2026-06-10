@@ -10,9 +10,7 @@
           <el-button type="primary" @click="openCreate">新增用户</el-button>
         </div>
 
-        <!-- User Stats with Skeleton -->
-        <el-skeleton v-if="loadingPage" :rows="2" animated />
-        <div v-else class="user-stats">
+        <div class="user-stats">
           <div class="user-stat">
             <span>总用户</span>
             <strong>{{ userStats.total }}</strong>
@@ -106,8 +104,7 @@
           <h2>审批流配置</h2>
           <span class="badge">RBAC</span>
         </div>
-        <el-skeleton v-if="loadingPage" :rows="3" animated />
-        <div v-else class="approval-template">
+        <div class="approval-template">
           <div v-for="template in templates" :key="template.id">
             <strong>{{ template.template_name }}</strong>
             <span>{{ businessTypeText(template.business_type) }}</span>
@@ -125,66 +122,63 @@
         </div>
         <span class="status" :class="llmForm.enabled ? 'ok' : 'warn'">{{ llmForm.enabled ? '已启用' : '已关闭' }}</span>
       </div>
-      <el-skeleton v-if="loadingPage" :rows="4" animated />
-      <template v-else>
-        <div class="llm-toolbar">
-          <label class="switch-row">
-            <span>启用 LLM 兜底解析</span>
-            <el-switch v-model="llmForm.enabled" active-text="开启" inactive-text="关闭" />
-          </label>
-          <el-select v-model="llmForm.active_profile_id" placeholder="当前启用模型">
-            <el-option
-              v-for="profile in llmProfiles"
-              :key="profile.id"
-              :label="`${profile.name || '未命名模型'} / ${profile.model || '-'}`"
-              :value="profile.id"
-            />
-          </el-select>
-          <el-button @click="addLlmProfile">新增模型</el-button>
-        </div>
-        <div class="llm-profile-list">
-          <div v-for="(profile, index) in llmProfiles" :key="profile.id" class="llm-profile-card">
-            <div class="llm-profile-head">
-              <strong>{{ profile.name || `模型 ${index + 1}` }}</strong>
-              <el-tag v-if="profile.id === llmForm.active_profile_id" type="success" size="small">当前启用</el-tag>
-            </div>
-            <div class="llm-config-grid">
-              <label>
-                配置名称
-                <el-input v-model.trim="profile.name" placeholder="例如：OpenAI 默认模型" />
-              </label>
-              <label>
-                模型名称
-                <el-input v-model.trim="profile.model" placeholder="gpt-4o-mini" />
-              </label>
-              <label class="full">
-                API Base URL
-                <el-input v-model.trim="profile.api_base_url" placeholder="https://api.openai.com/v1" />
-              </label>
-              <label class="full">
-                API Key
-                <el-input v-model="profile.api_key" type="password" show-password placeholder="留空表示保留该模型已保存 Key" />
-                <span class="muted">{{ profile.api_key ? '将覆盖该模型已保存 Key' : llmKeyStatus(profile) }}</span>
-              </label>
-            </div>
-            <div class="form-actions">
-              <el-button :loading="testingProfileId === profile.id" @click="testLlmConfig(profile)">测试连接</el-button>
-              <el-button @click="setActiveLlmProfile(profile.id)">设为启用</el-button>
-              <el-button type="danger" :disabled="llmProfiles.length <= 1" @click="removeLlmProfile(profile.id)">删除</el-button>
-            </div>
+      <div class="llm-toolbar">
+        <label class="switch-row">
+          <span>启用 LLM 兜底解析</span>
+          <el-switch v-model="llmForm.enabled" active-text="开启" inactive-text="关闭" />
+        </label>
+        <el-select v-model="llmForm.active_profile_id" placeholder="当前启用模型">
+          <el-option
+            v-for="profile in llmProfiles"
+            :key="profile.id"
+            :label="`${profile.name || '未命名模型'} / ${profile.model || '-'}`"
+            :value="profile.id"
+          />
+        </el-select>
+        <el-button @click="addLlmProfile">新增模型</el-button>
+      </div>
+      <div class="llm-profile-list">
+        <div v-for="(profile, index) in llmProfiles" :key="profile.id" class="llm-profile-card">
+          <div class="llm-profile-head">
+            <strong>{{ profile.name || `模型 ${index + 1}` }}</strong>
+            <el-tag v-if="profile.id === llmForm.active_profile_id" type="success" size="small">当前启用</el-tag>
+          </div>
+          <div class="llm-config-grid">
+            <label>
+              配置名称
+              <el-input v-model.trim="profile.name" placeholder="例如：OpenAI 默认模型" />
+            </label>
+            <label>
+              模型名称
+              <el-input v-model.trim="profile.model" placeholder="gpt-4o-mini" />
+            </label>
+            <label class="full">
+              API Base URL
+              <el-input v-model.trim="profile.api_base_url" placeholder="https://api.openai.com/v1" />
+            </label>
+            <label class="full">
+              API Key
+              <el-input v-model="profile.api_key" type="password" show-password placeholder="留空表示保留该模型已保存 Key" />
+              <span class="muted">{{ profile.api_key ? '将覆盖该模型已保存 Key' : llmKeyStatus(profile) }}</span>
+            </label>
+          </div>
+          <div class="form-actions">
+            <el-button :loading="testingProfileId === profile.id" @click="testLlmConfig(profile)">测试连接</el-button>
+            <el-button @click="setActiveLlmProfile(profile.id)">设为启用</el-button>
+            <el-button type="danger" :disabled="llmProfiles.length <= 1" @click="removeLlmProfile(profile.id)">删除</el-button>
           </div>
         </div>
-        <div class="form-actions">
-          <el-button type="primary" :loading="savingLlm" @click="saveLlmConfig">保存全部配置</el-button>
-        </div>
-        <el-alert
-          v-if="llmTestMessage"
-          :title="llmTestMessage"
-          :type="llmTestOk ? 'success' : 'warning'"
-          :closable="false"
-          style="margin-top: 12px"
-        />
-      </template>
+      </div>
+      <div class="form-actions">
+        <el-button type="primary" :loading="savingLlm" @click="saveLlmConfig">保存全部配置</el-button>
+      </div>
+      <el-alert
+        v-if="llmTestMessage"
+        :title="llmTestMessage"
+        :type="llmTestOk ? 'success' : 'warning'"
+        :closable="false"
+        style="margin-top: 12px"
+      />
     </section>
 
     <section class="panel">
@@ -192,13 +186,10 @@
         <h2>数据字典</h2>
         <el-button @click="load">刷新</el-button>
       </div>
-      <el-skeleton v-if="loadingPage" :rows="2" animated />
-      <template v-else>
-        <div class="dict-grid">
-          <span v-for="group in dictGroups" :key="group.type">{{ group.type }}：{{ group.items.join('、') }}</span>
-        </div>
-        <el-empty v-if="!dictGroups.length" description="暂无字典数据" />
-      </template>
+      <div class="dict-grid">
+        <span v-for="group in dictGroups" :key="group.type">{{ group.type }}：{{ group.items.join('、') }}</span>
+      </div>
+      <el-empty v-if="!dictGroups.length" description="暂无字典数据" />
     </section>
 
     <section class="panel">
@@ -209,18 +200,15 @@
         </div>
         <span class="status" :class="ocrHealthClass">{{ ocrHealthStatus }}</span>
       </div>
-      <el-skeleton v-if="loadingPage" :rows="2" animated />
-      <template v-else>
-        <div v-if="ocrHealth" class="dict-grid">
-          <span>服务地址：{{ ocrHealth.service.url }}</span>
-          <span>健康检查：{{ ocrHealth.service.health_url }}</span>
-          <span>模型加载：{{ ocrHealth.service.model_loaded ? '已加载' : '未加载' }}</span>
-          <span v-if="ocrHealth.service.error">服务错误：{{ ocrHealth.service.error }}</span>
-          <span v-if="ocrHealth.service.load_error">模型错误：{{ ocrHealth.service.load_error }}</span>
-          <span v-if="ocrHealth.latest_log">最近识别：{{ ocrHealth.latest_log.status }} / {{ ocrHealth.latest_log.file_name || '-' }}</span>
-        </div>
-        <el-empty v-else description="暂无 OCR 健康状态" />
-      </template>
+      <div v-if="ocrHealth" class="dict-grid">
+        <span>服务地址：{{ ocrHealth.service.url }}</span>
+        <span>健康检查：{{ ocrHealth.service.health_url }}</span>
+        <span>模型加载：{{ ocrHealth.service.model_loaded ? '已加载' : '未加载' }}</span>
+        <span v-if="ocrHealth.service.error">服务错误：{{ ocrHealth.service.error }}</span>
+        <span v-if="ocrHealth.service.load_error">模型错误：{{ ocrHealth.service.load_error }}</span>
+        <span v-if="ocrHealth.latest_log">最近识别：{{ ocrHealth.latest_log.status }} / {{ ocrHealth.latest_log.file_name || '-' }}</span>
+      </div>
+      <el-empty v-else description="暂无 OCR 健康状态" />
     </section>
 
     <div class="content-grid">
@@ -306,7 +294,6 @@ import { http } from '../api/http'
 import { roleNames, type Role, useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
-const loadingPage = ref(true)
 const users = ref<any[]>([])
 const dicts = ref<any[]>([])
 const templates = ref<any[]>([])
@@ -733,11 +720,7 @@ async function load() {
 }
 
 onMounted(async () => {
-  try {
-    await Promise.all([loadUsers(), load(), loadLlmConfig()])
-  } finally {
-    loadingPage.value = false
-  }
+  await Promise.all([loadUsers(), load(), loadLlmConfig()])
 })
 </script>
 
