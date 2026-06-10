@@ -74,6 +74,27 @@ def _apply_extracted_to_project(project: Project, extracted: dict, fallback_name
             pass
 
 
+def _remove_file_best_effort(file_path: str | None) -> None:
+    if not file_path:
+        return
+    try:
+        path = Path(file_path)
+        if path.exists() and path.is_file():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _clear_contract_context(db: Session, project_id: int, file_types: set[str] | None = None) -> None:
+    db.query(ContractDiff).filter(ContractDiff.project_id == project_id).delete(synchronize_session=False)
+    query = db.query(Contract).filter(Contract.project_id == project_id)
+    if file_types:
+        query = query.filter(Contract.file_type.in_(file_types))
+    for contract in query.all():
+        _remove_file_best_effort(contract.file_path)
+        db.delete(contract)
+
+
 def _project_out(db: Session, project: Project) -> dict:
     data = ProjectOut.model_validate(project).model_dump()
     latest_instance = (
@@ -217,6 +238,7 @@ async def parse_word_draft(
         )
         db.add(project)
         db.flush()
+    _clear_contract_context(db, project.id, {"word"})
     path = await save_upload(word_contract, "contracts")
     db.add(Contract(project_id=project.id, version=1, file_type="word", file_path=path, file_name=word_contract.filename, file_size=word_contract.size, upload_by=user.id))
     result = recognize_file(db, path, "contract")
@@ -226,7 +248,16 @@ async def parse_word_draft(
     log_action(db, user, "project_word_parse_draft", f"{project.project_no} {word_contract.filename}")
     db.commit()
     db.refresh(project)
-    return ok({"project": ProjectOut.model_validate(project).model_dump(), "extracted": extracted, "missing_fields": _missing_fields(project), "ocr": result}, "解析完成")
+    return ok({
+        "project": ProjectOut.model_validate(project).model_dump(),
+        "extracted": extracted,
+        "missing_fields": _missing_fields(project),
+        "ocr": result,
+        "parse_source": result.get("parse_source"),
+        "llm_used": result.get("llm_used", False),
+        "field_sources": result.get("field_sources", {}),
+        "manual_required_fields": result.get("manual_required_fields", []),
+    }, "解析完成")
 
 
 @router.post("/stamped-contract/parse")
@@ -241,9 +272,12 @@ async def parse_stamped_contract(
         raise HTTPException(status_code=404, detail="项目不存在")
     if project.status not in {PROJECT_DRAFT, PROJECT_PENDING} and user.role != ADMIN:
         raise HTTPException(status_code=400, detail="当前状态不可上传合同")
+    _clear_contract_context(db, project.id, {"pdf", "image"})
     path = await save_upload(pdf_contract, "contracts")
     version = (db.query(func.count(Contract.id)).filter(Contract.project_id == project_id).scalar() or 0) + 1
-    contract = Contract(project_id=project.id, version=version, file_type="pdf", file_path=path, file_name=pdf_contract.filename, file_size=pdf_contract.size, upload_by=user.id)
+    suffix = Path(pdf_contract.filename or "").suffix.lower()
+    file_type = "image" if suffix in {".jpg", ".jpeg", ".png"} else "pdf"
+    contract = Contract(project_id=project.id, version=version, file_type=file_type, file_path=path, file_name=pdf_contract.filename, file_size=pdf_contract.size, upload_by=user.id)
     db.add(contract)
     db.flush()
     result = recognize_file(db, path, "contract")
@@ -269,6 +303,10 @@ async def parse_stamped_contract(
         "ocr": result,
         "raw_text_preview": (result.get("raw_text") or "")[:500],
         "recognized_line_count": line_count,
+        "parse_source": result.get("parse_source"),
+        "llm_used": result.get("llm_used", False),
+        "field_sources": result.get("field_sources", {}),
+        "manual_required_fields": result.get("manual_required_fields", []),
     }, message)
 
 
@@ -276,16 +314,22 @@ async def parse_stamped_contract(
 
 
 @router.get("/options")
-def project_options(usage: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def project_options(usage: str | None = None, keyword: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(Project)
-    if usage in ("invoice", "close"):
+    if usage in ("invoice", "payment", "close"):
         query = query.filter(Project.status.in_([PROJECT_APPROVED, PROJECT_ACTIVE]))
-    elif usage == "payment":
-        invoice_project_ids = db.query(Invoice.project_id).distinct()
-        query = query.filter(Project.status.in_([PROJECT_APPROVED, PROJECT_ACTIVE]), Project.id.in_(invoice_project_ids))
     elif usage == "active":
         query = query.filter(Project.status == PROJECT_ACTIVE)
-    projects = query.order_by(Project.create_time.desc()).all()
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.filter(
+            Project.project_no.like(like)
+            | Project.contract_no.like(like)
+            | Project.name.like(like)
+            | Project.customer.like(like)
+            | Project.party_a.like(like)
+        )
+    projects = query.order_by(Project.create_time.desc()).limit(30).all()
     return ok([
         {
             "id": p.id,
@@ -351,6 +395,7 @@ def project_detail(project_id: int, db: Session = Depends(get_db), user: User = 
 def list_projects(
     keyword: str | None = None,
     status: str | None = None,
+    year: int | None = None,
     pg: Pagination = Depends(get_pagination),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -358,7 +403,15 @@ def list_projects(
     query = db.query(Project)
     if keyword:
         like = f"%{keyword}%"
-        query = query.filter((Project.name.like(like)) | (Project.project_no.like(like)) | (Project.customer.like(like)))
+        query = query.filter(
+            (Project.name.like(like))
+            | (Project.project_no.like(like))
+            | (Project.contract_no.like(like))
+            | (Project.customer.like(like))
+            | (Project.party_a.like(like))
+        )
+    if year:
+        query = query.filter(Project.create_time >= datetime(year, 1, 1), Project.create_time < datetime(year + 1, 1, 1))
     if status and status != "rejected_draft":
         query = query.filter(Project.status == status)
     if status == "rejected_draft":

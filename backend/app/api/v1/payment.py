@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import Pagination, get_pagination, require_roles
 from app.db.session import get_db
-from app.models.entities import Payment, User
+from app.models.entities import Invoice, Payment, User
 from app.models.enums import ADMIN, FINANCE, PM
 from app.schemas.common import ok, paginated
 from app.services.audit import log_action
@@ -33,6 +33,7 @@ def list_payments(
             "project_id": p.project_id,
             "invoice_id": p.invoice_id,
             "invoice_no": p.invoice.invoice_no if p.invoice else None,
+            "invoice_label": p.invoice.invoice_no if p.invoice else "未关联发票",
             "amount": float(p.amount),
             "payment_date": p.payment_date.isoformat(),
             "payment_method": p.payment_method,
@@ -48,7 +49,7 @@ def list_payments(
 @router.post("/create")
 async def create_payment(
     project_id: int = Form(...),
-    invoice_id: int = Form(...),
+    invoice_id: int | None = Form(None),
     amount: Decimal = Form(...),
     payment_date: date = Form(...),
     payment_method: str = Form("bank"),
@@ -57,13 +58,19 @@ async def create_payment(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(FINANCE)),
 ):
-    validate_payment_amount(db, project_id, invoice_id, amount)
+    if invoice_id:
+        invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="关联发票不存在")
+        if invoice.project_id != project_id:
+            raise HTTPException(status_code=400, detail="关联发票不属于当前项目")
+    validate_payment_amount(db, project_id, amount)
     path = await save_upload(voucher_file, "payments")
     payment = Payment(project_id=project_id, invoice_id=invoice_id, amount=amount, payment_date=payment_date, payment_method=payment_method, voucher_file=path, remark=remark, create_by=user.id)
     db.add(payment)
     db.flush()
     data = calculate_receivable(db, project_id)
-    log_action(db, user, "payment_create", f"project:{project_id} invoice:{invoice_id} amount:{amount}")
+    log_action(db, user, "payment_create", f"project:{project_id} invoice:{invoice_id or 'none'} amount:{amount}")
     db.commit()
     return ok({"id": payment.id, "receivable": data}, "回款登记成功")
 

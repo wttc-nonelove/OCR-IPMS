@@ -3,18 +3,17 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import Pagination, get_pagination, require_roles
 from app.db.session import get_db
-from app.models.entities import Invoice, Payment, User
+from app.models.entities import Invoice, User
 from app.models.enums import ADMIN, FINANCE, PM
 from app.schemas.common import ok, paginated
 from app.services.audit import log_action
 from app.services.approval import create_approval_instance
 from app.services.files import save_upload
-from app.services.finance import calculate_receivable, validate_invoice_amount
+from app.services.finance import calculate_receivable, validate_invoice_amount, validate_invoice_delete
 from app.services.ocr import recognize_file
 
 router = APIRouter(prefix="/invoice", tags=["invoice"])
@@ -152,11 +151,9 @@ def delete_invoice(invoice_id: int, db: Session = Depends(get_db), user: User = 
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="发票不存在")
-    payment_count = db.query(func.count(Payment.id)).filter(Payment.invoice_id == invoice.id).scalar() or 0
-    if payment_count:
-        raise HTTPException(status_code=400, detail="该发票有回款不允许删除")
     project_id = invoice.project_id
     invoice_no = invoice.invoice_no
+    validate_invoice_delete(db, project_id, invoice.id)
     db.delete(invoice)
     data = calculate_receivable(db, project_id)
     log_action(db, user, "invoice_delete", f"{invoice_no} project:{project_id}")

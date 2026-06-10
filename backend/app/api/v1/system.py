@@ -2,15 +2,43 @@ import re
 
 import httpx
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import Pagination, get_current_user, get_pagination
+from app.api.deps import Pagination, get_current_user, get_pagination, require_roles
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.entities import DictItem, OcrRecognitionLog, SysLog, User
+from app.models.enums import ADMIN
 from app.schemas.common import ok, paginated
+from app.services.system_config import (
+    get_llm_config_payload,
+    get_llm_runtime_config,
+    runtime_from_profile,
+    test_llm_connection,
+    update_llm_config,
+)
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+class LLMProfilePayload(BaseModel):
+    id: str | None = None
+    name: str
+    api_base_url: str
+    model: str
+    api_key: str | None = None
+
+
+class LLMConfigUpdate(BaseModel):
+    enabled: bool
+    active_profile_id: str | None = None
+    profiles: list[LLMProfilePayload]
+
+
+class LLMConfigTest(BaseModel):
+    enabled: bool | None = None
+    profile: LLMProfilePayload | None = None
 
 
 @router.get("/dicts")
@@ -76,6 +104,35 @@ def list_ocr_logs(pg: Pagination = Depends(get_pagination), db: Session = Depend
         ],
         total, pg.page, pg.page_size,
     )
+
+
+@router.get("/config/llm")
+def get_llm_config(db: Session = Depends(get_db), user: User = Depends(require_roles(ADMIN))):
+    return ok(get_llm_config_payload(db))
+
+
+@router.put("/config/llm")
+def save_llm_config(payload: LLMConfigUpdate, db: Session = Depends(get_db), user: User = Depends(require_roles(ADMIN))):
+    data = update_llm_config(
+        db,
+        user,
+        enabled=payload.enabled,
+        profiles=[profile.model_dump() for profile in payload.profiles],
+        active_profile_id=payload.active_profile_id,
+    )
+    return ok(data, "LLM 配置已保存")
+
+
+@router.post("/config/llm/test")
+def test_llm_config(payload: LLMConfigTest, db: Session = Depends(get_db), user: User = Depends(require_roles(ADMIN))):
+    current = get_llm_runtime_config(db)
+    if payload.profile:
+        config = runtime_from_profile(current.enabled if payload.enabled is None else payload.enabled, payload.profile.model_dump(), current)
+    else:
+        config = current
+        if payload.enabled is not None:
+            config.enabled = payload.enabled
+    return ok(test_llm_connection(config))
 
 
 @router.get("/ocr-health")

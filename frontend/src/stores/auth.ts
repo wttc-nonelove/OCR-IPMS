@@ -7,24 +7,24 @@ export const roleNames: Record<Role, string> = {
   admin: '管理员',
   business: '商务',
   finance: '财务',
-  pm: '项目经理'
+  pm: '项目经理',
 }
 
 export const roleRoutes: Record<Role, string[]> = {
   admin: ['dashboard', 'project', 'invoice', 'close', 'report', 'system'],
   business: ['dashboard', 'project', 'report'],
   finance: ['dashboard', 'project', 'invoice', 'close', 'report'],
-  pm: ['dashboard', 'project', 'close', 'report']
+  pm: ['dashboard', 'project', 'close', 'report'],
 }
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: localStorage.getItem('token') || '',
-    user: JSON.parse(localStorage.getItem('user') || 'null') as null | { id: number; username: string; name: string; role: Role }
+    user: JSON.parse(localStorage.getItem('user') || 'null') as null | { id: number; username: string; name: string; role: Role },
   }),
   getters: {
     role: (state) => state.user?.role,
-    isLoggedIn: (state) => Boolean(state.token && state.user)
+    isLoggedIn: (state) => Boolean(state.token && state.user),
   },
   actions: {
     async login(username: string, password: string) {
@@ -42,6 +42,6 @@ export const useAuthStore = defineStore('auth', {
     },
     can(routeName: string) {
       return this.user ? roleRoutes[this.user.role].includes(routeName) : false
-    }
-  }
+    },
+  },
 })

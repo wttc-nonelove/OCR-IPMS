@@ -54,6 +54,20 @@ class DictItem(Base):
     create_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class SysConfig(Base):
+    __tablename__ = "sys_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    config_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    config_value: Mapped[str | None] = mapped_column(Text)
+    config_type: Mapped[str] = mapped_column(String(50), default="system", index=True)
+    description: Mapped[str | None] = mapped_column(String(500))
+    is_secret: Mapped[int] = mapped_column(default=0)
+    update_by: Mapped[int | None] = mapped_column(index=True)
+    create_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class SysLog(Base):
     __tablename__ = "sys_log"
 
@@ -167,7 +181,7 @@ class Payment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("project_info.id", ondelete="CASCADE"), index=True)
-    invoice_id: Mapped[int] = mapped_column(ForeignKey("project_invoice.id", ondelete="RESTRICT"), index=True)
+    invoice_id: Mapped[int | None] = mapped_column(ForeignKey("project_invoice.id", ondelete="SET NULL"), index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(15, 2))
     payment_date: Mapped[date] = mapped_column(Date, index=True)
     payment_method: Mapped[str] = mapped_column(String(20))
