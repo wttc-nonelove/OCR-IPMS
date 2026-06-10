@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     paddleocr_url: str = "http://paddleocr:8000/api/v1/ocr"
     baidu_ocr_api_key: str | None = None
     baidu_ocr_secret_key: str | None = None
+    llm_enabled: bool = False
+    llm_api_base_url: str = "https://api.openai.com/v1"
+    llm_api_key: str | None = None
+    llm_model: str = "gpt-4o-mini"
     # CORS 允许的来源列表，逗号分隔；生产环境应设置具体域名
     cors_origins: str = "*"
 

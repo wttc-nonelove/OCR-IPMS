@@ -1,5 +1,8 @@
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import unicodedata
 from decimal import Decimal, InvalidOperation
@@ -11,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.entities import OcrRecognitionLog
+from app.services.system_config import LLMRuntimeConfig, get_llm_runtime_config
 
 
 _CN_DIGITS = {
@@ -311,9 +315,36 @@ def _extract_amount(text: str, labels: list[str] | None = None) -> str:
     return max(candidates, key=lambda item: Decimal(item)) if candidates else ""
 
 
+def _extract_contract_total_amount(text: str) -> str:
+    text = _normalize_text(text)
+    priority_patterns = [
+        r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)\s*[:：]?\s*(?:人民币)?\s*(?:小写)?\s*[:：]?\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d{1,2})?)",
+        r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)[^\n\r]{0,60}?[¥￥]\s*([0-9][0-9,]*(?:\.\d{1,2})?)",
+    ]
+    for pattern in priority_patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            amount = _decimal_text(match.group(1))
+            if amount:
+                return amount
+    heading_match = re.search(r"(?:合同金额及付款方式|合同金额|合同价款)([\s\S]{0,260})", text)
+    if heading_match:
+        snippet = heading_match.group(1)
+        for label in ["本合同总金额", "合同总金额", "合同金额", "人民币小写"]:
+            amount = _extract_amount_by_labels(snippet, [label], window=120, prefer="first")
+            if amount:
+                return amount
+    return ""
+
+
+def _has_explicit_contract_total_label(text: str) -> bool:
+    text = _normalize_text(text)
+    return bool(re.search(r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)", text))
+
+
 def _extract_date(text: str) -> str:
     text = _normalize_text(text)
-    match = re.search(r"(20\d{2})[年\-/\.](\d{1,2})[月\-/\.](\d{1,2})日?", text)
+    match = re.search(r"(20\d{2})\s*[年\-/\.]\s*(\d{1,2})\s*[月\-/\.]\s*(\d{1,2})\s*日?", text)
     if not match:
         return ""
     return f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
@@ -345,13 +376,38 @@ def _match_after(text: str, labels: list[str], limit: int = 120) -> str:
 
 def _extract_contract_no(text: str) -> str:
     text = _normalize_text(text)
-    match = re.search(r"\b(HT[-_A-Za-z0-9]{4,}|PRJ[-_A-Za-z0-9]{4,})\b", text, re.I)
+    match = re.search(r"\b(HT[-_A-Za-z0-9]{4,})\b", text, re.I)
     if match:
         return match.group(1)
     labeled = _match_after(text, ["合同编号", "合同号"], 80)
     if labeled:
         match = re.search(r"[A-Za-z0-9][A-Za-z0-9\-_]{3,}", labeled)
         return match.group(0) if match else labeled
+    return ""
+
+
+def _infer_project_name(text: str) -> str:
+    lines = _line_values(text)
+    candidates: list[str] = []
+    for index, line in enumerate(lines[:40]):
+        cleaned = _clean_value(line, 160)
+        if not cleaned:
+            continue
+        if "合同" in cleaned and any(word in cleaned for word in ["项目", "系统", "服务", "运维", "建设", "开发"]):
+            candidates.append(cleaned)
+        if "订立本合同" in cleaned:
+            match = re.search(r"就(.+?)(?:订立|签订|达成)本合同", cleaned)
+            if match:
+                candidates.append(_clean_value(match.group(1), 160))
+        if index + 1 < len(lines) and any(word in cleaned for word in ["年度", "项目", "系统"]) and "合同" not in cleaned:
+            next_line = _clean_value(lines[index + 1], 120)
+            if "合同" in next_line:
+                candidates.append(_clean_value(f"{cleaned}{next_line}", 160))
+    for candidate in candidates:
+        value = re.sub(r"^(?:预算管理一体化系统)?", "", candidate).strip()
+        value = re.sub(r"(?:合同|协议|书)$", "", value).strip()
+        if len(value) >= 6 and value not in {"合同", "项目合同"}:
+            return value
     return ""
 
 
@@ -369,16 +425,105 @@ def _extract_contract(text: str) -> dict:
     text = _normalize_text(text)
     party_a = _match_after(text, ["甲方", "委托方", "采购方", "客户名称", "客户"])
     party_b = _match_after(text, ["乙方", "承包方", "服务方", "供应商"])
+    party_c = _match_after(text, ["丙方", "监理方", "第三方"])
     return {
-        "project_name": _match_after(text, ["项目名称", "项目名", "项目"]),
-        "contract_amount": _extract_amount(text, ["合同金额", "合同总金额", "总金额", "价款", "金额", "人民币"]),
+        "project_name": _match_after(text, ["项目名称", "项目名"]) or _infer_project_name(text),
+        "contract_amount": _extract_contract_total_amount(text) or _extract_amount(text, ["本合同总金额", "合同总金额", "合同金额", "总金额", "价款", "金额", "人民币"]),
         "contract_no": _extract_contract_no(text),
         "sign_date": _extract_date(text),
         "party_a": party_a,
         "party_b": party_b,
+        "party_c": party_c,
         "customer": party_a,
         "project_type": _match_after(text, ["项目类型", "业务类型", "服务类型", "合同类型"], 50),
     }
+
+
+def _contract_manual_required(info: dict) -> list[str]:
+    labels = {
+        "project_name": "项目名称",
+        "contract_amount": "合同金额",
+        "party_a": "甲方/客户",
+        "party_b": "乙方",
+    }
+    return [label for key, label in labels.items() if not info.get(key)]
+
+
+def _call_llm_contract_extract(text: str, config: LLMRuntimeConfig) -> dict:
+    if not config.enabled or not config.api_key:
+        return {}
+    base_url = config.api_base_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
+    prompt = (
+        "你是合同信息抽取助手。请只返回 JSON，不要 Markdown。"
+        "从合同文本中提取字段：project_name, contract_amount, contract_no, sign_date, party_a, party_b, party_c, project_type。"
+        "contract_amount 返回数字字符串，单位元；sign_date 返回 YYYY-MM-DD；无法确定则返回空字符串。"
+        "金额必须优先取“本合同总金额/合同总金额/合同金额/合同价款”对应的总价，不能取分期付款、比例付款、保证金、罚款、账号、日期或编号。"
+        "合同编号只有出现“合同编号/合同号/HT-...”等明确标签时才填写；项目编号、采购编号、招标编号、PRJ 编号不能当合同编号。"
+        "项目名称可从封面标题或“就……项目订立本合同”中提取，例如标题行包含“运行维护项目（二次）合同”时，应去掉末尾“合同”。"
+        "甲方、乙方、丙方只从对应标签后的主体名称提取，不要提取开户行、户名、地址或联系人。"
+    )
+    payload = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": _normalize_text(text)[:12000]},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"}
+    response = httpx.post(url, headers=headers, json=payload, timeout=45)
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"]["content"]
+    data = json.loads(content)
+    cleaned = {
+        "project_name": _clean_value(data.get("project_name"), 160),
+        "contract_amount": _decimal_text(str(data.get("contract_amount") or "")),
+        "contract_no": _clean_value(data.get("contract_no"), 80),
+        "sign_date": _extract_date(str(data.get("sign_date") or "")) or _clean_value(data.get("sign_date"), 20),
+        "party_a": _clean_value(data.get("party_a"), 120),
+        "party_b": _clean_value(data.get("party_b"), 120),
+        "party_c": _clean_value(data.get("party_c"), 120),
+        "project_type": _clean_value(data.get("project_type"), 50),
+    }
+    cleaned["customer"] = cleaned["party_a"]
+    return cleaned
+
+
+def _complete_contract_info(db: Session, raw_text: str, info: dict) -> tuple[dict, bool, dict, list[str], str]:
+    merged = dict(info)
+    field_sources = {key: "rule" for key, value in merged.items() if value}
+    llm_used = False
+    llm_error = ""
+    config = get_llm_runtime_config(db)
+    has_total_label = _has_explicit_contract_total_label(raw_text)
+    if config.enabled and config.api_key:
+        try:
+            llm_info = _call_llm_contract_extract(raw_text, config)
+            if llm_info:
+                llm_used = True
+                for key, value in llm_info.items():
+                    if not value:
+                        continue
+                    if key == "contract_no" and merged.get(key):
+                        continue
+                    if key == "contract_amount" and merged.get(key) and has_total_label:
+                        continue
+                    if key in {"sign_date", "party_a", "party_b", "party_c", "customer"} and merged.get(key):
+                        continue
+                    if key == "project_name" and merged.get(key) and len(str(merged[key])) >= len(str(value)):
+                        continue
+                    if key in {"project_name", "contract_amount", "sign_date", "party_a", "party_b", "party_c", "project_type", "customer"}:
+                        merged[key] = value
+                        field_sources[key] = "llm"
+                    elif not merged.get(key):
+                        merged[key] = value
+                        field_sources[key] = "llm"
+        except Exception as exc:
+            llm_error = str(exc)
+    manual_required = _contract_manual_required(merged)
+    return merged, llm_used, field_sources, manual_required, llm_error
 
 
 def _extract_invoice(text: str) -> dict:
@@ -491,7 +636,39 @@ def _parse_docx(path: Path) -> str:
     return "\n".join(lines)
 
 
+def _convert_doc_with_libreoffice(path: Path) -> Path:
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        raise RuntimeError("当前环境未安装 LibreOffice，无法解析 .doc 文件，请转换为 .docx 后上传")
+    temp_dir = Path(tempfile.mkdtemp(prefix="doc_convert_"))
+    cmd = [
+        soffice,
+        "--headless",
+        "--convert-to",
+        "docx",
+        "--outdir",
+        str(temp_dir),
+        str(path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr or proc.stdout or ".doc 转换失败")
+    converted = temp_dir / f"{path.stem}.docx"
+    if not converted.exists():
+        matches = list(temp_dir.glob("*.docx"))
+        if not matches:
+            raise RuntimeError(".doc 转换后未生成 docx 文件")
+        converted = matches[0]
+    return converted
+
+
 def _read_document_text(path: Path) -> str:
+    if path.suffix.lower() == ".doc":
+        converted = _convert_doc_with_libreoffice(path)
+        try:
+            return _parse_docx(converted)
+        finally:
+            shutil.rmtree(converted.parent, ignore_errors=True)
     if path.suffix.lower() == ".docx":
         return _parse_docx(path)
     return path.read_text(encoding="utf-8", errors="ignore") if path.exists() else path.name
@@ -556,9 +733,17 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
             raw_result = {"lines": lines, "text": raw_text[:2000]}
 
         info = _extract_by_type(raw_text, recognition_type)
+        llm_used = False
+        field_sources = {key: "rule" for key, value in info.items() if value}
+        manual_required_fields: list[str] = []
+        llm_error = ""
+        if recognition_type == "contract":
+            info, llm_used, field_sources, manual_required_fields, llm_error = _complete_contract_info(db, raw_text, info)
         confidence = _confidence_for(info, base_confidence)
         duration = time.perf_counter() - start
         status = "success" if raw_text else "manual_required"
+        if recognition_type == "contract" and raw_text and manual_required_fields:
+            status = "manual_required"
         if recognition_type == "payment" and raw_text and not info.get("amount"):
             status = "manual_required"
         log = OcrRecognitionLog(
@@ -574,7 +759,22 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
         )
         db.add(log)
         db.flush()
-        return {"log_id": log.id, "raw_text": raw_text[:2000], "extracted_info": info, "confidence": confidence, "engine": engine, "duration": duration, "status": status}
+        result = {
+            "log_id": log.id,
+            "raw_text": raw_text[:2000],
+            "extracted_info": info,
+            "confidence": confidence,
+            "engine": engine,
+            "duration": duration,
+            "status": status,
+            "parse_source": "llm" if llm_used else "rule",
+            "llm_used": llm_used,
+            "field_sources": field_sources,
+            "manual_required_fields": manual_required_fields,
+        }
+        if llm_error:
+            result["llm_error"] = llm_error
+        return result
     except Exception as exc:
         duration = time.perf_counter() - start
         log = OcrRecognitionLog(

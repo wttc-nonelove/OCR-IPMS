@@ -1,7 +1,7 @@
 <template>
   <section class="page-grid">
     <div class="content-grid project-grid">
-      <section v-if="auth.user?.role === 'business'" class="panel">
+      <section v-if="canBusinessOperate" class="panel">
         <div class="panel-head">
           <div>
             <h2>立项草稿</h2>
@@ -73,7 +73,7 @@
         </div>
       </section>
 
-      <section v-if="auth.user?.role === 'business'" class="panel">
+      <section v-if="canBusinessOperate" class="panel">
         <div class="panel-head">
           <h2>盖章合同差异生成</h2>
           <span class="badge info">PDF/图片 OCR</span>
@@ -105,7 +105,7 @@
       </section>
     </div>
 
-    <section v-if="auth.user?.role === 'business'" class="panel">
+    <section v-if="canBusinessOperate" class="panel">
       <div class="panel-head">
         <div>
           <h2>合同差异确认</h2>
@@ -149,6 +149,14 @@
         </div>
         <div class="filter-row">
           <el-input v-model="keyword" placeholder="项目名称 / 编号 / 甲方" style="width: 240px" />
+          <el-date-picker
+            v-model="year"
+            type="year"
+            value-format="YYYY"
+            clearable
+            placeholder="按年份查询"
+            style="width: 150px"
+          />
           <el-select v-model="status" clearable placeholder="状态" style="width: 140px">
             <el-option label="草稿" value="draft" />
             <el-option label="已驳回草稿" value="rejected_draft" />
@@ -178,8 +186,8 @@
         <el-table-column label="操作" width="430" fixed="right">
           <template #default="{ row }">
             <el-button link @click="openProjectDetail(row.id)">查看详情</el-button>
-            <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="editDraft(row)">编辑草稿</el-button>
-            <el-button v-if="row.status === 'draft' && auth.user?.role === 'business'" link @click="submit(row.id)">提交审核</el-button>
+            <el-button v-if="row.status === 'draft' && canBusinessOperate" link @click="editDraft(row)">编辑草稿</el-button>
+            <el-button v-if="row.status === 'draft' && canBusinessOperate" link @click="submit(row.id)">提交审核</el-button>
             <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link @click="approve(row.id, 'approved')">通过</el-button>
             <el-button v-if="row.status === 'pending' && auth.user?.role === 'admin'" link type="danger" @click="approve(row.id, 'rejected')">驳回</el-button>
             <el-button v-if="row.status === 'approved' && auth.user?.role === 'admin'" link @click="start(row.id)">确认开始</el-button>
@@ -301,6 +309,7 @@ const diffs = ref<any[]>([])
 const projectTypes = ref<any[]>([])
 const keyword = ref('')
 const status = ref('')
+const year = ref('')
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
@@ -336,6 +345,8 @@ const form = reactive<any>({
   sign_date: '',
   project_type: 'software'
 })
+
+const canBusinessOperate = computed(() => ['business', 'admin'].includes(auth.user?.role || ''))
 
 const parseAlertType = computed(() => (parseMessage.value.includes('失败') || parseMessage.value.includes('补充') ? 'warning' : 'success'))
 const pdfAlertType = computed(() => {
@@ -416,7 +427,7 @@ async function loadProjectTypes() {
 }
 
 async function loadCurrentDraft() {
-  if (auth.user?.role !== 'business') return
+  if (!canBusinessOperate.value) return
   const res: any = await http.get('/project/draft/current')
   if (res.data?.project) {
     applyProject(res.data.project)
@@ -426,7 +437,7 @@ async function loadCurrentDraft() {
 }
 
 async function load() {
-  const res: any = await http.get('/project/list', { params: { keyword: keyword.value || undefined, status: status.value || undefined, page: page.value, page_size: pageSize.value } })
+  const res: any = await http.get('/project/list', { params: { keyword: keyword.value || undefined, status: status.value || undefined, year: year.value || undefined, page: page.value, page_size: pageSize.value } })
   const data = res.data
   projects.value = data.items.map((item: any) => ({ ...item, party_a: item.party_a || item.customer }))
   total.value = data.total
@@ -444,7 +455,7 @@ function onPageSizeChange(newSize: number) {
 }
 
 async function saveDraft(showMessage = false) {
-  if (auth.user?.role !== 'business') return
+  if (!canBusinessOperate.value) return
   if (!hasDraftContent()) return
   saving.value = true
   try {
@@ -644,7 +655,7 @@ let saveTimer: number | undefined
 watch(
   () => ({ name: form.name, party_a: form.party_a, party_b: form.party_b, amount: form.amount, contract_no: form.contract_no, sign_date: form.sign_date, project_type: form.project_type }),
   () => {
-    if (suppressAutoSave.value || auth.user?.role !== 'business') return
+    if (suppressAutoSave.value || !canBusinessOperate.value) return
     window.clearTimeout(saveTimer)
     saveStatus.value = '等待自动保存...'
     saveTimer = window.setTimeout(() => saveDraft(false), 900)

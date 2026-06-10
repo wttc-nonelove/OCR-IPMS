@@ -2,10 +2,13 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.models.entities import ApprovalApprover, ApprovalNode, ApprovalTemplate, DictItem, Role, User
+from app.services.system_config import ensure_default_configs
 
 
 def seed_initial_data(db: Session) -> None:
+    ensure_default_configs(db)
     if db.query(User).first():
+        db.commit()
         return
 
     users = [

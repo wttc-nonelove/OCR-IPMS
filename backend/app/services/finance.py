@@ -24,7 +24,9 @@ def calculate_receivable(db: Session, project_id: int) -> dict:
     project.balance_status = balance
     return {
         "invoiced_amount": float(invoiced),
+        "invoice_total_tax_included": float(invoiced),
         "paid_amount": float(paid),
+        "payment_total": float(paid),
         "receivable": float(receivable),
         "unpaid_amount": float(unpaid),
         "is_payment_complete": is_payment_complete,
@@ -49,11 +51,29 @@ def validate_invoice_amount(db: Session, project_id: int, amount_without_tax: De
     return project
 
 
-def validate_payment_amount(db: Session, project_id: int, invoice_id: int, amount: Decimal) -> Invoice:
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.project_id == project_id).with_for_update().first()
-    if not invoice:
-        raise HTTPException(status_code=404, detail="关联发票不存在")
-    paid = db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(Payment.invoice_id == invoice_id).scalar() or Decimal("0")
-    if paid + amount > invoice.amount:
-        raise HTTPException(status_code=400, detail="回款金额超过关联发票价税合计金额")
-    return invoice
+def validate_payment_amount(db: Session, project_id: int, amount: Decimal, exclude_payment_id: int | None = None) -> Project:
+    project = db.query(Project).filter(Project.id == project_id).with_for_update().first()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    invoiced = db.query(func.coalesce(func.sum(Invoice.amount), 0)).filter(Invoice.project_id == project_id).scalar() or Decimal("0")
+    payment_query = db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(Payment.project_id == project_id)
+    if exclude_payment_id:
+        payment_query = payment_query.filter(Payment.id != exclude_payment_id)
+    paid = payment_query.scalar() or Decimal("0")
+    if invoiced <= 0:
+        raise HTTPException(status_code=400, detail="该项目暂无开票记录，不能登记回款")
+    if paid + amount > invoiced:
+        raise HTTPException(status_code=400, detail="回款金额超过项目累计开票价税合计金额")
+    return project
+
+
+def validate_invoice_delete(db: Session, project_id: int, invoice_id: int) -> None:
+    remaining_invoiced = (
+        db.query(func.coalesce(func.sum(Invoice.amount), 0))
+        .filter(Invoice.project_id == project_id, Invoice.id != invoice_id)
+        .scalar()
+        or Decimal("0")
+    )
+    paid = db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(Payment.project_id == project_id).scalar() or Decimal("0")
+    if paid > remaining_invoiced:
+        raise HTTPException(status_code=400, detail="删除后回款将超过累计开票金额，不能删除该发票")

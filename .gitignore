@@ -28,7 +28,6 @@ Thumbs.db
 .env
 .env.local
 .env.production
-.env.docker
 
 # Temporary files
 .tmp_*

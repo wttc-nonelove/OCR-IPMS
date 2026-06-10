@@ -34,8 +34,10 @@ def finance_summary(project_id: int, db: Session = Depends(get_db), user: User =
             "project_name": project.name,
             "contract_amount": contract_amount,
             "invoiced_amount": invoiced,
+            "invoice_total_tax_included": invoiced,
             "invoiced_without_tax_amount": invoiced_without_tax,
             "paid_amount": paid,
+            "payment_total": paid,
             "receivable": receivable["receivable"],
             "unpaid_amount": receivable["unpaid_amount"],
             "is_payment_complete": receivable["is_payment_complete"],
@@ -44,12 +46,20 @@ def finance_summary(project_id: int, db: Session = Depends(get_db), user: User =
             "invoice_progress": invoice_progress,
             "payment_progress": payment_progress,
             "balance_status": receivable["balance_status"],
+            "ledger_warning": "累计回款超过累计开票，请检查台账" if paid > invoiced else "",
+            "ledger_rows": [
+                {"type": "invoice", "date": i.invoice_date.isoformat(), "no": i.invoice_no, "amount": float(i.amount), "remark": "开票"}
+                for i in invoices
+            ] + [
+                {"type": "payment", "date": p.payment_date.isoformat(), "no": p.invoice.invoice_no if p.invoice else "未关联发票", "amount": float(p.amount), "remark": p.remark or "回款"}
+                for p in payments
+            ],
             "invoices": [
                 {"id": i.id, "invoice_no": i.invoice_no, "amount": float(i.amount), "amount_without_tax": float(i.amount_without_tax or 0), "tax_rate": float(i.tax_rate or 0), "tax_amount": float(i.tax_amount or 0), "invoice_date": i.invoice_date.isoformat(), "invoice_type": i.invoice_type}
                 for i in invoices
             ],
             "payments": [
-                {"id": p.id, "invoice_id": p.invoice_id, "amount": float(p.amount), "payment_date": p.payment_date.isoformat(), "payment_method": p.payment_method}
+                {"id": p.id, "invoice_id": p.invoice_id, "invoice_no": p.invoice.invoice_no if p.invoice else None, "invoice_label": p.invoice.invoice_no if p.invoice else "未关联发票", "amount": float(p.amount), "payment_date": p.payment_date.isoformat(), "payment_method": p.payment_method, "remark": p.remark}
                 for p in payments
             ],
         }

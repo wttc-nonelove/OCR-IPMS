@@ -14,10 +14,7 @@ def _trim(value: str | None) -> str | None:
 
 
 def _validate_role(value: str | None) -> str | None:
-    value = _trim(value)
-    if value is not None and value not in VALID_ROLES:
-        raise ValueError("角色无效")
-    return value
+    return _trim(value)
 
 
 def _validate_phone(value: str | None) -> str | None:
