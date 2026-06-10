@@ -50,7 +50,12 @@
         </div>
         <div class="top-actions">
           <el-tag effect="light">{{ auth.user?.name }} / {{ currentRoleName }}</el-tag>
-          <el-button v-if="auth.can('project') && ['business', 'admin'].includes(auth.user?.role || '')" type="primary" @click="router.push('/project')">
+          <el-button
+            v-if="auth.can('project') && ['business', 'admin'].includes(auth.user?.role || '')"
+            type="primary"
+            class="btn-cta"
+            @click="router.push('/project')"
+          >
             新建立项
           </el-button>
           <el-button @click="logout">退出</el-button>
