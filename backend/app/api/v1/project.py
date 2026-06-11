@@ -291,6 +291,8 @@ async def parse_stamped_contract(
         parse_status, message = "ocr_failed", f"OCR识别失败：{result.get('error_message') or '请检查文件质量或格式'}"
     elif not any(extracted.values()):
         parse_status, message = "field_extract_failed", "OCR已识别文本，但未提取到合同关键字段，请查看原文摘要或手动补充"
+    elif result.get("raw_text") and len(result["raw_text"].strip()) < 20:
+        parse_status, message = "ocr_low_quality", "OCR识别文本过短，可能是扫描件质量不佳，建议使用清晰的扫描件或手动填写"
     elif diffs:
         parse_status, message = "diff_found", f"识别完成，生成 {len(diffs)} 条差异"
     else:

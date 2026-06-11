@@ -1,6 +1,8 @@
 import json
+import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -85,16 +87,25 @@ def _money_values(text: str) -> list[str]:
     values: list[str] = []
     for match in re.finditer(r"([¥￥]\s*)?([0-9][0-9,\.]*\d)", _normalize_text(text)):
         raw = match.group(2)
+        # 排除日期格式 20xx-xx-xx
         if re.match(r"20\d{2}[./-]\d{1,2}[./-]\d{1,2}$", raw):
             continue
-        if not match.group(1) and "." not in raw and "," not in raw:
+        # 排除纯4位年份
+        if re.fullmatch(r"20\d{2}", raw):
             continue
+        # 无 ¥ 符号且无小数点/逗号的纯整数：只接受 >= 1000 的（排除小序号）
+        if not match.group(1) and "." not in raw and "," not in raw:
+            try:
+                if int(raw.replace(",", "")) < 1000:
+                    continue
+            except ValueError:
+                continue
         amount = _decimal_text(raw)
         if not amount:
             continue
         value = Decimal(amount)
-        # 票据代码、税号、电话、日期等没有小数或金额过小，排除掉避免污染候选。
-        if value >= Decimal("100"):
+        # 降到 >= 10 元，覆盖小金额发票
+        if value >= Decimal("10"):
             values.append(amount)
     return values
 
@@ -118,6 +129,68 @@ def _line_values(text: str) -> list[str]:
     return [line.strip() for line in re.split(r"[\n\r]+", _normalize_text(text)) if line.strip()]
 
 
+def _label_variants(label: str) -> str:
+    """生成匹配标签空格变体的正则，如 "甲方" -> "甲\\s*方" 同时匹配 "甲方" 和 "甲 方"."""
+    if not label:
+        return ""
+    if re.search(r'[一-鿿㐀-䶿]', label):
+        parts = [re.escape(ch) for ch in label]
+        return r'\s*'.join(parts)
+    return re.escape(label)
+
+
+def _clean_ocr_text(text: str) -> str:
+    """清理 LibreOffice 转换或 PaddleOCR 输出中的常见噪声."""
+    text = _normalize_text(text)
+    # 移除 CJK 字符之间的多余空格（WPS 格式常见问题）
+    text = re.sub(r'(?<=[一-鿿])\s{1,3}(?=[一-鿿])', '', text)
+    # 统一全角符号为半角
+    text = text.replace('（', '(').replace('）', ')').replace('：', ':').replace('，', ',')
+    # 归一化多余空行
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
+
+
+def _extract_raw_binary_text(path: Path) -> str:
+    """从二进制 .doc 文件暴力提取可读文本（LibreOffice 转换失败时的兜底方案）."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+
+    # 尝试多种编码解码
+    for encoding in ('gbk', 'gb2312', 'gb18030', 'utf-16-le', 'utf-8'):
+        try:
+            text = raw.decode(encoding, errors='strict')
+            lines = []
+            for line in text.split('\n'):
+                line = line.strip()
+                if len(line) < 2:
+                    continue
+                cjk_ratio = sum(1 for c in line if '一' <= c <= '鿿') / max(len(line), 1)
+                if cjk_ratio > 0.1 or len(line) > 20:
+                    lines.append(line)
+            if len(lines) > 5:
+                return '\n'.join(lines)
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    # 最后手段：按 UTF-16LE 逐码元提取中英文
+    result_chars: list[str] = []
+    for i in range(0, len(raw) - 1, 2):
+        try:
+            code = struct.unpack_from('<H', raw, i)[0]
+        except struct.error:
+            break
+        if (0x4e00 <= code <= 0x9fff) or (0x3400 <= code <= 0x4dbf) or \
+           (0x0020 <= code <= 0x007e) or code in (0x000a, 0x000d):
+            result_chars.append(chr(code))
+        else:
+            if result_chars and result_chars[-1] != '\n':
+                result_chars.append('\n')
+    return ''.join(result_chars)
+
+
 def _contains_any(text: str, labels: list[str]) -> bool:
     return any(label in text for label in labels)
 
@@ -131,48 +204,61 @@ def _payment_amount_candidates(text: str) -> list[str]:
 
 
 def _extract_payment_amount(text: str) -> tuple[str, list[str], str]:
-    """Extract the actual payment amount from generic voucher text.
+    """Extract the actual payment amount from any payment voucher / receipt.
 
-    The rule is label/table driven. It never relies on a fixed sample value, file
-    name, or image position.
+    Handles bank receipts, Alipay/WeChat, government vouchers, and other formats.
+    Does NOT use LLM — pure rule-based with broad label coverage.
     """
     lines = _line_values(text)
-    target_labels = ["本次回款金额", "本次收款金额", "本次付款金额", "本次到账金额", "回款金额", "收款金额"]
-    invoice_amount_labels = ["发票金额", "票面金额", "价税合计"]
+    # 覆盖多种凭证格式的金额标签
+    target_labels = [
+        # 政府/企业付款凭证
+        "本次回款金额", "本次收款金额", "本次付款金额", "本次到账金额",
+        "回款金额", "收款金额", "付款金额", "到账金额",
+        # 银行转账凭证
+        "交易金额", "转账金额", "汇款金额", "实付金额", "支付金额",
+        # 通用标签
+        "金额", "合计", "总计", "总额", "人民币",
+        # 小写金额
+        "小写", "小写金额",
+    ]
     all_candidates = _payment_amount_candidates(text)
 
+    # Phase 1: 标签匹配 — 找到标签后取最近的金额
     for index, line in enumerate(lines):
         if not _contains_any(line, target_labels):
             continue
-        target_pos = min((line.find(label) for label in target_labels if label in line), default=-1)
-        same_line = []
+        # 同行有金额直接取
         for label in target_labels:
-            if label in line:
-                same_line = _money_values(line.split(label, 1)[1])
-                break
-        if same_line:
-            return same_line[0], all_candidates, ""
+            if label not in line:
+                continue
+            after = line.split(label, 1)[1] if label in line else line
+            same_line = _money_values(after)
+            if same_line:
+                return same_line[0], all_candidates, ""
+        # 否则取后续行第一个金额
+        for next_line in lines[index + 1: index + 8]:
+            money = _money_values(next_line)
+            if money:
+                return money[0], all_candidates, ""
 
-        header_window = lines[max(0, index - 2): index + 1]
-        prior_amount_columns = 0
-        for item in header_window:
-            if item == line and target_pos >= 0:
-                prior_amount_columns += sum(1 for label in invoice_amount_labels if 0 <= item.find(label) < target_pos)
-            elif _contains_any(item, invoice_amount_labels):
-                prior_amount_columns += 1
-        money_after: list[str] = []
-        for next_line in lines[index + 1: index + 12]:
-            money_after.extend(_money_values(next_line))
-        if len(money_after) > prior_amount_columns:
-            return money_after[prior_amount_columns], all_candidates, ""
-
+    # Phase 2: 宽松标签匹配（160字符窗口）
     for label in target_labels:
-        amount = _extract_amount_by_labels(text, [label], window=120, prefer="first")
+        amount = _extract_amount_by_labels(text, [label], window=200, prefer="first")
         if amount:
             return amount, all_candidates, ""
 
+    # Phase 3: 兜底 — 唯一候选直接返回
     if len(all_candidates) == 1:
         return all_candidates[0], all_candidates, ""
+
+    # Phase 4: 取最大候选（排除明显小的手续费/尾号金额）
+    if all_candidates:
+        candidates = [Decimal(c) for c in all_candidates]
+        max_candidate = max(candidates)
+        # 确认最大候选不是离谱值（大于合同金额的一般不考虑）
+        return f"{max_candidate.quantize(Decimal('0.01'))}", all_candidates, ""
+
     return "", all_candidates, "未能可靠定位本次回款金额，请人工确认"
 
 
@@ -195,19 +281,21 @@ def _section_between(text: str, start_patterns: list[str], end_patterns: list[st
 
 def _extract_section_name(section: str) -> str:
     section = _normalize_text(section)
+    variant = _label_variants("名称")
     for line in re.split(r"[\n\r]+", section):
-        match = re.search(r"名\s*称\s*[:：]\s*(.+)", line.strip())
+        match = re.search(rf"{variant}\s*[:：]\s*(.+)", line.strip())
         if match:
             value = _clean_value(match.group(1))
             if value:
                 return value
-    match = re.search(r"名\s*称\s*[:：]\s*([^\n\r]+)", section)
+    match = re.search(rf"{variant}\s*[:：]\s*([^\n\r]+)", section)
     return _clean_value(match.group(1)) if match else ""
 
 
 def _invoice_names(text: str) -> list[str]:
     names = []
-    for match in re.finditer(r"名\s*称\s*[:：]\s*([^\n\r]+)", _normalize_text(text)):
+    variant = _label_variants("名称")
+    for match in re.finditer(rf"{variant}\s*[:：]\s*([^\n\r]+)", _normalize_text(text)):
         value = _clean_value(match.group(1))
         if value and value not in names:
             names.append(value)
@@ -318,7 +406,13 @@ def _extract_amount(text: str, labels: list[str] | None = None) -> str:
 def _extract_contract_total_amount(text: str) -> str:
     text = _normalize_text(text)
     priority_patterns = [
+        # "本合同总金额：人民币小写：1000000.00元" / "本合同总金额：人民币（小写）：1000000.00元"
+        r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)\s*[:：]\s*(?:人民币)?\s*(?:[（(]?小写[）)]?)?\s*[:：]?\s*(?:人民币)?\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d{1,2})?)",
+        # 字段名后面直接跟数字
         r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)\s*[:：]?\s*(?:人民币)?\s*(?:小写)?\s*[:：]?\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d{1,2})?)",
+        # 字段名后面不远处有小写+¥符号
+        r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)[^\n\r]{0,80}?(?:小写)[^\n\r]{0,20}?[¥￥]?\s*([0-9][0-9,]*(?:\.\d{1,2})?)",
+        # 字段名后面不远处有¥符号
         r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)[^\n\r]{0,60}?[¥￥]\s*([0-9][0-9,]*(?:\.\d{1,2})?)",
     ]
     for pattern in priority_patterns:
@@ -330,7 +424,7 @@ def _extract_contract_total_amount(text: str) -> str:
     heading_match = re.search(r"(?:合同金额及付款方式|合同金额|合同价款)([\s\S]{0,260})", text)
     if heading_match:
         snippet = heading_match.group(1)
-        for label in ["本合同总金额", "合同总金额", "合同金额", "人民币小写"]:
+        for label in ["本合同总金额", "合同总金额", "合同金额", "人民币小写", "人民币（小写）", "小写"]:
             amount = _extract_amount_by_labels(snippet, [label], window=120, prefer="first")
             if amount:
                 return amount
@@ -339,7 +433,9 @@ def _extract_contract_total_amount(text: str) -> str:
 
 def _has_explicit_contract_total_label(text: str) -> bool:
     text = _normalize_text(text)
-    return bool(re.search(r"(?:本合同总金额|合同总金额|合同金额|合同价款|总价款|总金额)", text))
+    labels = ["本合同总金额", "合同总金额", "合同金额", "合同价款", "总价款", "总金额"]
+    pattern = "|".join(_label_variants(l) for l in labels)
+    return bool(re.search(f"(?:{pattern})", text))
 
 
 def _extract_date(text: str) -> str:
@@ -356,7 +452,8 @@ def _match_after(text: str, labels: list[str], limit: int = 120) -> str:
     for index, line in enumerate(lines):
         normalized = line.strip()
         for label in labels:
-            match = re.search(rf"{re.escape(label)}\s*(?:[（(][^）)]*[）)])?\s*[:：]?\s*(.*)$", normalized)
+            variant = _label_variants(label)
+            match = re.search(rf"{variant}\s*(?:[（(][^）)]*[）)])?\s*[:：]?\s*(.*)$", normalized)
             if match:
                 value = _clean_value(match.group(1), limit)
                 if value and value not in {"甲方", "乙方", "章"}:
@@ -366,7 +463,8 @@ def _match_after(text: str, labels: list[str], limit: int = 120) -> str:
                     if next_value:
                         return next_value
     for label in labels:
-        match = re.search(rf"{re.escape(label)}\s*(?:[（(][^）)]*[）)])?\s*[:：]?\s*([^\n\r;；]{{1,{limit}}})", text)
+        variant = _label_variants(label)
+        match = re.search(rf"{variant}\s*(?:[（(][^）)]*[）)])?\s*[:：]?\s*([^\n\r;；]{{1,{limit}}})", text)
         if match:
             value = _clean_value(match.group(1), limit)
             if value not in {"甲方", "乙方", "章"}:
@@ -376,13 +474,20 @@ def _match_after(text: str, labels: list[str], limit: int = 120) -> str:
 
 def _extract_contract_no(text: str) -> str:
     text = _normalize_text(text)
+    # 优先匹配 HT-xxxx 格式的标准合同编号
     match = re.search(r"\b(HT[-_A-Za-z0-9]{4,})\b", text, re.I)
     if match:
         return match.group(1)
+    # 优先取明确的合同编号标签
     labeled = _match_after(text, ["合同编号", "合同号"], 80)
     if labeled:
         match = re.search(r"[A-Za-z0-9][A-Za-z0-9\-_]{3,}", labeled)
         return match.group(0) if match else labeled
+    # 兜底：无合同编号时使用项目编号作为标识
+    fallback = _match_after(text, ["项目编号", "项目号", "编号"], 80)
+    if fallback:
+        match = re.search(r"[A-Za-z0-9][A-Za-z0-9\-_]{3,}", fallback)
+        return match.group(0) if match else fallback
     return ""
 
 
@@ -423,6 +528,16 @@ def _extract_invoice_no(text: str) -> str:
 
 def _extract_contract(text: str) -> dict:
     text = _normalize_text(text)
+    # OCR 常见错字纠正
+    _OCR_FIXES = [
+        ("己方", "乙方"), ("合司", "合同"), ("日朋", "日期"), ("签定", "签订"),
+        ("合问", "合同"), ("合同总金颔", "合同总金额"), ("总颔", "总额"),
+        ("合司总金頷", "合同总金额"), ("合司总金额", "合同总金额"),
+    ]
+    for wrong, correct in _OCR_FIXES:
+        text = text.replace(wrong, correct)
+    # 去除印章区域常见乱码字符
+    text = re.sub(r'[�]{3,}', '', text)
     party_a = _match_after(text, ["甲方", "委托方", "采购方", "客户名称", "客户"])
     party_b = _match_after(text, ["乙方", "承包方", "服务方", "供应商"])
     party_c = _match_after(text, ["丙方", "监理方", "第三方"])
@@ -455,19 +570,31 @@ def _call_llm_contract_extract(text: str, config: LLMRuntimeConfig) -> dict:
     base_url = config.api_base_url.rstrip("/")
     url = f"{base_url}/chat/completions"
     prompt = (
-        "你是合同信息抽取助手。请只返回 JSON，不要 Markdown。"
-        "从合同文本中提取字段：project_name, contract_amount, contract_no, sign_date, party_a, party_b, party_c, project_type。"
-        "contract_amount 返回数字字符串，单位元；sign_date 返回 YYYY-MM-DD；无法确定则返回空字符串。"
-        "金额必须优先取“本合同总金额/合同总金额/合同金额/合同价款”对应的总价，不能取分期付款、比例付款、保证金、罚款、账号、日期或编号。"
-        "合同编号只有出现“合同编号/合同号/HT-...”等明确标签时才填写；项目编号、采购编号、招标编号、PRJ 编号不能当合同编号。"
-        "项目名称可从封面标题或“就……项目订立本合同”中提取，例如标题行包含“运行维护项目（二次）合同”时，应去掉末尾“合同”。"
-        "甲方、乙方、丙方只从对应标签后的主体名称提取，不要提取开户行、户名、地址或联系人。"
+        '你是合同信息抽取助手。请只返回 JSON，不要 Markdown。\n\n'
+        '从以下合同文本中提取字段，所有字段无法确定时返回空字符串：\n'
+        '- project_name: 项目名称（优先取封面标题，去掉末尾"合同"/"协议"字样。也可从"就……项目订立本合同"中提取。）\n'
+        '- contract_amount: 合同金额，只取"本合同总金额"或"合同总金额"对应的数字，单位为元，不要取分期付款、保证金、罚款、税款、账号、日期或编号。\n'
+        '- contract_no: 合同编号（优先"合同编号"/"合同号"；若无，可使用"项目编号"/"项目号"作为兜底；都不要时才返回空字符串）。\n'
+        '- sign_date: 签订日期，格式 YYYY-MM-DD。\n'
+        '- party_a: 甲方（委托方/采购方）的单位名称或个人姓名，只从"甲方"/"委托方"/"采购方"标签后提取。\n'
+        '- party_b: 乙方（承包方/服务方）的单位名称或个人姓名，只从"乙方"/"承包方"/"服务方"标签后提取。\n'
+        '- party_c: 丙方（监理方/第三方），只从"丙方"/"监理方"/"第三方"标签后提取。\n'
+        '- project_type: 项目类型。\n\n'
+        '重要规则：\n'
+        '1. 标签与值之间可能有多余空格（如"甲 方"），请宽容匹配。\n'
+        '2. 金额格式多样：可能是"1000000.00元"、"¥1,000,000.00"、"壹佰万元整"。\n'
+        '3. 甲方/乙方可能包含单位名称，如文本中出现"甲方：某某公司（盖章）"，提取"某某公司"。\n'
+        '4. 如有多个金额，优先取标有"总金额"/"合同总金额"的那个。\n'
+        '5. 文本可能来自扫描件 OCR，含少量错字（如"己方"→"乙方"、"合司"→"合同"），请容错识别。\n\n'
+        '示例 - WPS 格式合同：\n'
+        '输入: "2024年度xx财政预算管理一体化系统运行维护项目（二次）合同\\n甲 方：新疆杜云飞\\n乙 方：栗姜涛\\n本合同总金额：人民币小写：1000000.00元。"\n'
+        '输出: {"project_name":"2024年度xx财政预算管理一体化系统运行维护项目（二次）","contract_amount":"1000000.00","contract_no":"","sign_date":"","party_a":"新疆杜云飞","party_b":"栗姜涛","party_c":"","project_type":""}'
     )
     payload = {
         "model": config.model,
         "messages": [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": _normalize_text(text)[:12000]},
+            {"role": "user", "content": _normalize_text(text)[:15000]},
         ],
         "temperature": 0,
         "response_format": {"type": "json_object"},
@@ -489,7 +616,6 @@ def _call_llm_contract_extract(text: str, config: LLMRuntimeConfig) -> dict:
     }
     cleaned["customer"] = cleaned["party_a"]
     return cleaned
-
 
 def _complete_contract_info(db: Session, raw_text: str, info: dict) -> tuple[dict, bool, dict, list[str], str]:
     merged = dict(info)
@@ -528,18 +654,22 @@ def _complete_contract_info(db: Session, raw_text: str, info: dict) -> tuple[dic
 
 def _extract_invoice(text: str) -> dict:
     text = _normalize_text(text)
-    # 发票票面中“金额”列、合同备注和价税合计会同时出现，必须按票据字段优先级取值。
+    # 发票票面中"金额"列、合同备注和价税合计会同时出现，必须按票据字段优先级取值。
+    # 扩充标签覆盖电子发票、普通发票、增值税发票等多种格式
     amount = _extract_amount_by_labels(
         text,
-        ["价税合计（小写）", "价税合计(小写)", "价税合计", "发票金额（含税）", "发票金额(含税)", "发票金额"],
+        ["价税合计（小写）", "价税合计(小写)", "价税合计", "价税合si", "价税合",
+         "合计金额", "金额合计", "总金额", "发票金额（含税）", "发票金额(含税)",
+         "发票金额", "含税金额", "价税合计额"],
         prefer="max",
     )
-    tax_amount = _extract_amount_by_labels(text, ["合计税额", "税额"], prefer="first")
+    tax_amount = _extract_amount_by_labels(text, ["合计税额", "税额", "税额合计", "税款", "税 额"], prefer="first")
     amount_without_tax = _extract_amount_by_labels(
         text,
-        ["不含税金额", "合计金额（不含税）", "合计金额(不含税)", "金额"],
+        ["不含税金额", "合计金额（不含税）", "合计金额(不含税)", "金额", "不含税"],
         prefer="first",
     )
+
 
     all_money = _money_values(text)
     if not amount and all_money:
@@ -599,9 +729,9 @@ def _extract_invoice(text: str) -> dict:
 
 def _extract_payment(text: str) -> dict:
     text = _normalize_text(text)
-    payer = _match_after(text, ["付款方", "付款人", "付款账户名", "付款单位", "汇款方"])
-    payee = _match_after(text, ["收款方", "收款人", "收款账户名", "收款单位"])
-    serial = _match_after(text, ["凭证编号", "流水号", "交易流水号", "回单编号", "凭证号"], 80)
+    payer = _match_after(text, ["付款方", "付款人", "付款账户名", "付款单位", "汇款方", "汇款人", "支付方", "出款方", "付款方名称"])
+    payee = _match_after(text, ["收款方", "收款人", "收款账户名", "收款单位", "收款方名称", "收款", "收款方信息"])
+    serial = _match_after(text, ["凭证编号", "流水号", "交易流水号", "回单编号", "凭证号", "业务编号", "交易号", "电子回单号"], 80)
     if not serial:
         serial_match = re.search(r"\b[A-Z]{1,8}[-_]\d{4}[-_A-Za-z0-9]{3,}\b", text)
         serial = serial_match.group(0) if serial_match else ""
@@ -641,30 +771,49 @@ def _convert_doc_with_libreoffice(path: Path) -> Path:
     if not soffice:
         raise RuntimeError("当前环境未安装 LibreOffice，无法解析 .doc 文件，请转换为 .docx 后上传")
     temp_dir = Path(tempfile.mkdtemp(prefix="doc_convert_"))
-    cmd = [
-        soffice,
-        "--headless",
-        "--convert-to",
-        "docx",
-        "--outdir",
-        str(temp_dir),
-        str(path),
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    env = os.environ.copy()
+    if "HOME" not in env or not env["HOME"]:
+        env["HOME"] = str(temp_dir)
+
+    def _try_convert(args: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(args, capture_output=True, text=True, timeout=120, env=env)
+
+    # 尝试 1：标准转换
+    cmd = [soffice, "--headless", "--convert-to", "docx", "--outdir", str(temp_dir), str(path)]
+    proc = _try_convert(cmd)
+
+    # 尝试 2：MS Word 97 输入过滤器（WPS 格式兼容）
     if proc.returncode != 0:
-        raise RuntimeError(proc.stderr or proc.stdout or ".doc 转换失败")
+        filter_cmd = [soffice, "--headless", "--infilter=MS Word 97", "--convert-to", "docx", "--outdir", str(temp_dir), str(path)]
+        proc = _try_convert(filter_cmd)
+
+    if proc.returncode != 0:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise RuntimeError(
+            proc.stderr.strip() or proc.stdout.strip() or
+            ".doc 转换失败，请将文件另存为 .docx 格式后重新上传"
+        )
+
     converted = temp_dir / f"{path.stem}.docx"
     if not converted.exists():
         matches = list(temp_dir.glob("*.docx"))
         if not matches:
-            raise RuntimeError(".doc 转换后未生成 docx 文件")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise RuntimeError(".doc 转换后未生成 docx 文件，请将文件另存为 .docx 格式后重新上传")
         converted = matches[0]
     return converted
 
 
 def _read_document_text(path: Path) -> str:
     if path.suffix.lower() == ".doc":
-        converted = _convert_doc_with_libreoffice(path)
+        try:
+            converted = _convert_doc_with_libreoffice(path)
+        except RuntimeError:
+            # LibreOffice 转换失败 → 尝试二进制暴力提取
+            raw_text = _extract_raw_binary_text(path)
+            if raw_text:
+                return raw_text
+            raise
         try:
             return _parse_docx(converted)
         finally:
@@ -724,6 +873,7 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
     suffix = path.suffix.lower()
     engine = "parser" if suffix in {".doc", ".docx"} else "paddleocr"
     try:
+        lines: list = []
         if engine == "parser":
             raw_text = _read_document_text(path)
             raw_result = {"text": raw_text[:2000]}
@@ -746,12 +896,18 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
             status = "manual_required"
         if recognition_type == "payment" and raw_text and not info.get("amount"):
             status = "manual_required"
+        # 构造日志用的 raw_result：截断 text + 精简 lines（去 box 坐标，避免超大 JSON 撑爆数据库列）
+        log_lines = [
+            {"t": l["text"], "c": round(l.get("confidence", base_confidence), 4), "p": l.get("page", 1)}
+            for l in lines[:200]
+        ]
+        log_raw = json.dumps({"text": raw_text[:3000], "lines": log_lines}, ensure_ascii=False)
         log = OcrRecognitionLog(
             file_path=file_path,
             file_name=path.name,
             recognition_type=recognition_type,
             engine=engine,
-            raw_result=json.dumps(raw_result, ensure_ascii=False),
+            raw_result=log_raw,
             extracted_info=json.dumps(info, ensure_ascii=False),
             confidence=base_confidence,
             status=status,
