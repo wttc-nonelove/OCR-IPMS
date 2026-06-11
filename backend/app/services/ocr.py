@@ -873,6 +873,7 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
     suffix = path.suffix.lower()
     engine = "parser" if suffix in {".doc", ".docx"} else "paddleocr"
     try:
+        lines: list = []
         if engine == "parser":
             raw_text = _read_document_text(path)
             raw_result = {"text": raw_text[:2000]}
@@ -895,12 +896,18 @@ def recognize_file(db: Session, file_path: str, recognition_type: str) -> dict:
             status = "manual_required"
         if recognition_type == "payment" and raw_text and not info.get("amount"):
             status = "manual_required"
+        # 构造日志用的 raw_result：截断 text + 精简 lines（去 box 坐标，避免超大 JSON 撑爆数据库列）
+        log_lines = [
+            {"t": l["text"], "c": round(l.get("confidence", base_confidence), 4), "p": l.get("page", 1)}
+            for l in lines[:200]
+        ]
+        log_raw = json.dumps({"text": raw_text[:3000], "lines": log_lines}, ensure_ascii=False)
         log = OcrRecognitionLog(
             file_path=file_path,
             file_name=path.name,
             recognition_type=recognition_type,
             engine=engine,
-            raw_result=json.dumps(raw_result, ensure_ascii=False),
+            raw_result=log_raw,
             extracted_info=json.dumps(info, ensure_ascii=False),
             confidence=base_confidence,
             status=status,
