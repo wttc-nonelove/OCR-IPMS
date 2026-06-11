@@ -23,7 +23,7 @@ def test_weak_label_contract_extracts_total_amount_and_empty_contract_no():
     info = _extract_contract(text)
 
     assert info["contract_amount"] == "1000000.00"
-    assert info["contract_no"] == ""
+    assert info["contract_no"] == "ZYZB-2024-Z-010-"
     assert info["sign_date"] == "2026-06-10"
     assert info["party_a"] == "新疆杜云飞"
     assert info["party_b"] == "栗姜涛"

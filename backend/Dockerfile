@@ -1,6 +1,8 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV HOME=/tmp
+ENV SAL_USE_VCLPLUGIN=gen
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libreoffice-writer fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
