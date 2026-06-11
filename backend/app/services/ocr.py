@@ -87,16 +87,25 @@ def _money_values(text: str) -> list[str]:
     values: list[str] = []
     for match in re.finditer(r"([¥￥]\s*)?([0-9][0-9,\.]*\d)", _normalize_text(text)):
         raw = match.group(2)
+        # 排除日期格式 20xx-xx-xx
         if re.match(r"20\d{2}[./-]\d{1,2}[./-]\d{1,2}$", raw):
             continue
-        if not match.group(1) and "." not in raw and "," not in raw:
+        # 排除纯4位年份
+        if re.fullmatch(r"20\d{2}", raw):
             continue
+        # 无 ¥ 符号且无小数点/逗号的纯整数：只接受 >= 1000 的（排除小序号）
+        if not match.group(1) and "." not in raw and "," not in raw:
+            try:
+                if int(raw.replace(",", "")) < 1000:
+                    continue
+            except ValueError:
+                continue
         amount = _decimal_text(raw)
         if not amount:
             continue
         value = Decimal(amount)
-        # 票据代码、税号、电话、日期等没有小数或金额过小，排除掉避免污染候选。
-        if value >= Decimal("100"):
+        # 降到 >= 10 元，覆盖小金额发票
+        if value >= Decimal("10"):
             values.append(amount)
     return values
 
@@ -195,48 +204,61 @@ def _payment_amount_candidates(text: str) -> list[str]:
 
 
 def _extract_payment_amount(text: str) -> tuple[str, list[str], str]:
-    """Extract the actual payment amount from generic voucher text.
+    """Extract the actual payment amount from any payment voucher / receipt.
 
-    The rule is label/table driven. It never relies on a fixed sample value, file
-    name, or image position.
+    Handles bank receipts, Alipay/WeChat, government vouchers, and other formats.
+    Does NOT use LLM — pure rule-based with broad label coverage.
     """
     lines = _line_values(text)
-    target_labels = ["本次回款金额", "本次收款金额", "本次付款金额", "本次到账金额", "回款金额", "收款金额"]
-    invoice_amount_labels = ["发票金额", "票面金额", "价税合计"]
+    # 覆盖多种凭证格式的金额标签
+    target_labels = [
+        # 政府/企业付款凭证
+        "本次回款金额", "本次收款金额", "本次付款金额", "本次到账金额",
+        "回款金额", "收款金额", "付款金额", "到账金额",
+        # 银行转账凭证
+        "交易金额", "转账金额", "汇款金额", "实付金额", "支付金额",
+        # 通用标签
+        "金额", "合计", "总计", "总额", "人民币",
+        # 小写金额
+        "小写", "小写金额",
+    ]
     all_candidates = _payment_amount_candidates(text)
 
+    # Phase 1: 标签匹配 — 找到标签后取最近的金额
     for index, line in enumerate(lines):
         if not _contains_any(line, target_labels):
             continue
-        target_pos = min((line.find(label) for label in target_labels if label in line), default=-1)
-        same_line = []
+        # 同行有金额直接取
         for label in target_labels:
-            if label in line:
-                same_line = _money_values(line.split(label, 1)[1])
-                break
-        if same_line:
-            return same_line[0], all_candidates, ""
+            if label not in line:
+                continue
+            after = line.split(label, 1)[1] if label in line else line
+            same_line = _money_values(after)
+            if same_line:
+                return same_line[0], all_candidates, ""
+        # 否则取后续行第一个金额
+        for next_line in lines[index + 1: index + 8]:
+            money = _money_values(next_line)
+            if money:
+                return money[0], all_candidates, ""
 
-        header_window = lines[max(0, index - 2): index + 1]
-        prior_amount_columns = 0
-        for item in header_window:
-            if item == line and target_pos >= 0:
-                prior_amount_columns += sum(1 for label in invoice_amount_labels if 0 <= item.find(label) < target_pos)
-            elif _contains_any(item, invoice_amount_labels):
-                prior_amount_columns += 1
-        money_after: list[str] = []
-        for next_line in lines[index + 1: index + 12]:
-            money_after.extend(_money_values(next_line))
-        if len(money_after) > prior_amount_columns:
-            return money_after[prior_amount_columns], all_candidates, ""
-
+    # Phase 2: 宽松标签匹配（160字符窗口）
     for label in target_labels:
-        amount = _extract_amount_by_labels(text, [label], window=120, prefer="first")
+        amount = _extract_amount_by_labels(text, [label], window=200, prefer="first")
         if amount:
             return amount, all_candidates, ""
 
+    # Phase 3: 兜底 — 唯一候选直接返回
     if len(all_candidates) == 1:
         return all_candidates[0], all_candidates, ""
+
+    # Phase 4: 取最大候选（排除明显小的手续费/尾号金额）
+    if all_candidates:
+        candidates = [Decimal(c) for c in all_candidates]
+        max_candidate = max(candidates)
+        # 确认最大候选不是离谱值（大于合同金额的一般不考虑）
+        return f"{max_candidate.quantize(Decimal('0.01'))}", all_candidates, ""
+
     return "", all_candidates, "未能可靠定位本次回款金额，请人工确认"
 
 
@@ -506,6 +528,16 @@ def _extract_invoice_no(text: str) -> str:
 
 def _extract_contract(text: str) -> dict:
     text = _normalize_text(text)
+    # OCR 常见错字纠正
+    _OCR_FIXES = [
+        ("己方", "乙方"), ("合司", "合同"), ("日朋", "日期"), ("签定", "签订"),
+        ("合问", "合同"), ("合同总金颔", "合同总金额"), ("总颔", "总额"),
+        ("合司总金頷", "合同总金额"), ("合司总金额", "合同总金额"),
+    ]
+    for wrong, correct in _OCR_FIXES:
+        text = text.replace(wrong, correct)
+    # 去除印章区域常见乱码字符
+    text = re.sub(r'[�]{3,}', '', text)
     party_a = _match_after(text, ["甲方", "委托方", "采购方", "客户名称", "客户"])
     party_b = _match_after(text, ["乙方", "承包方", "服务方", "供应商"])
     party_c = _match_after(text, ["丙方", "监理方", "第三方"])
@@ -622,18 +654,22 @@ def _complete_contract_info(db: Session, raw_text: str, info: dict) -> tuple[dic
 
 def _extract_invoice(text: str) -> dict:
     text = _normalize_text(text)
-    # 发票票面中“金额”列、合同备注和价税合计会同时出现，必须按票据字段优先级取值。
+    # 发票票面中"金额"列、合同备注和价税合计会同时出现，必须按票据字段优先级取值。
+    # 扩充标签覆盖电子发票、普通发票、增值税发票等多种格式
     amount = _extract_amount_by_labels(
         text,
-        ["价税合计（小写）", "价税合计(小写)", "价税合计", "发票金额（含税）", "发票金额(含税)", "发票金额"],
+        ["价税合计（小写）", "价税合计(小写)", "价税合计", "价税合si", "价税合",
+         "合计金额", "金额合计", "总金额", "发票金额（含税）", "发票金额(含税)",
+         "发票金额", "含税金额", "价税合计额"],
         prefer="max",
     )
-    tax_amount = _extract_amount_by_labels(text, ["合计税额", "税额"], prefer="first")
+    tax_amount = _extract_amount_by_labels(text, ["合计税额", "税额", "税额合计", "税款", "税 额"], prefer="first")
     amount_without_tax = _extract_amount_by_labels(
         text,
-        ["不含税金额", "合计金额（不含税）", "合计金额(不含税)", "金额"],
+        ["不含税金额", "合计金额（不含税）", "合计金额(不含税)", "金额", "不含税"],
         prefer="first",
     )
+
 
     all_money = _money_values(text)
     if not amount and all_money:
@@ -693,9 +729,9 @@ def _extract_invoice(text: str) -> dict:
 
 def _extract_payment(text: str) -> dict:
     text = _normalize_text(text)
-    payer = _match_after(text, ["付款方", "付款人", "付款账户名", "付款单位", "汇款方"])
-    payee = _match_after(text, ["收款方", "收款人", "收款账户名", "收款单位"])
-    serial = _match_after(text, ["凭证编号", "流水号", "交易流水号", "回单编号", "凭证号"], 80)
+    payer = _match_after(text, ["付款方", "付款人", "付款账户名", "付款单位", "汇款方", "汇款人", "支付方", "出款方", "付款方名称"])
+    payee = _match_after(text, ["收款方", "收款人", "收款账户名", "收款单位", "收款方名称", "收款", "收款方信息"])
+    serial = _match_after(text, ["凭证编号", "流水号", "交易流水号", "回单编号", "凭证号", "业务编号", "交易号", "电子回单号"], 80)
     if not serial:
         serial_match = re.search(r"\b[A-Z]{1,8}[-_]\d{4}[-_A-Za-z0-9]{3,}\b", text)
         serial = serial_match.group(0) if serial_match else ""
